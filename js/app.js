@@ -24,17 +24,25 @@
     { key: "quantity", label: "Số lượng", required: false },
     { key: "price", label: "Đơn giá", required: false },
     { key: "revenue", label: "Doanh thu", required: false },
+    { key: "status", label: "Trạng thái đơn hàng", required: false },
   ];
 
+  // Longer/more specific phrases first so scoring naturally favors them.
   const KEYWORDS = {
-    date: ["ngay", "ngay ban", "ngay dat hang", "ngay giao dich", "date", "order date", "thoi gian"],
-    product: ["san pham", "mat hang", "ten san pham", "product", "item", "ten hang"],
-    category: ["danh muc", "loai", "nhom", "category", "phan loai"],
-    customer: ["khach hang", "khach", "customer", "ten khach hang"],
-    quantity: ["so luong", "qty", "quantity", "sl"],
-    price: ["don gia", "gia", "price", "unit price", "gia ban"],
-    revenue: ["doanh thu", "thanh tien", "tong tien", "revenue", "total", "amount", "gia tri", "thanh toan"],
+    date: ["ngay dat hang", "ngay ban", "ngay giao dich", "order date", "ngay", "date", "thoi gian"],
+    product: ["ten san pham", "ten mat hang", "ten hang", "san pham", "mat hang", "product", "item"],
+    category: ["ten phan loai hang", "danh muc san pham", "danh muc", "phan loai hang", "phan loai", "loai", "nhom", "category"],
+    customer: ["ten khach hang", "khach hang", "khach", "customer"],
+    quantity: ["so luong san pham", "so luong", "qty", "quantity", "sl"],
+    price: ["gia uu dai", "don gia", "gia ban", "gia goc", "gia", "price", "unit price"],
+    revenue: ["tong gia tri don hang", "tong so tien thanh toan", "doanh thu", "thanh tien", "tong tien", "gia tri don hang", "thanh toan", "revenue", "total", "amount", "gia tri"],
+    status: ["trang thai don hang", "trang thai", "status"],
   };
+
+  // Columns that are identifiers/codes (SKU, mã...) should not win name-like fields
+  // even if their header text happens to contain a matching keyword substring.
+  const IDENTIFIER_PREFIX = /^(sku|ma|id)\b/;
+  const NAME_LIKE_FIELDS = new Set(["product", "category", "customer"]);
 
   /* ---------------- Utils ---------------- */
   function stripDiacritics(str) {
@@ -50,14 +58,36 @@
     return stripDiacritics(h).replace(/[^a-z0-9]+/g, " ").trim();
   }
 
-  function guessField(header) {
-    const norm = normalizeHeader(header);
-    for (const [field, words] of Object.entries(KEYWORDS)) {
-      for (const w of words) {
-        if (norm === w || norm.includes(w)) return field;
+  // For every field, pick the header with the strongest match (exact match beats
+  // substring, longer keyword beats shorter, identifier-style columns are penalized
+  // for name-like fields). Returns { field: headerName }.
+  function detectMapping(headers) {
+    const normalized = headers.map(h => ({ h, n: normalizeHeader(h) }));
+    const result = {};
+
+    for (const field of Object.keys(KEYWORDS)) {
+      let bestHeader = null;
+      let bestScore = -Infinity;
+
+      for (const { h, n } of normalized) {
+        const isIdentifier = IDENTIFIER_PREFIX.test(n);
+        for (const w of KEYWORDS[field]) {
+          let score;
+          if (n === w) score = 100 + w.length;
+          else if (n.includes(w)) score = w.length;
+          else continue;
+
+          if (isIdentifier && NAME_LIKE_FIELDS.has(field)) score -= 50;
+
+          if (score > bestScore) {
+            bestScore = score;
+            bestHeader = h;
+          }
+        }
       }
+      if (bestHeader) result[field] = bestHeader;
     }
-    return null;
+    return result;
   }
 
   function fmtNumber(n) {
@@ -74,9 +104,11 @@
     }
     if (typeof v === "string") {
       const s = v.trim();
-      let m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+      // Strip a trailing time part like "2026-02-01 00:01" or "01/02/2026 00:01:00"
+      const datePart = s.split(/[\sT]/)[0];
+      let m = datePart.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
       if (m) return new Date(+m[3], +m[2] - 1, +m[1]);
-      m = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
+      m = datePart.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
       if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
       const d = new Date(s);
       if (!isNaN(d)) return d;
@@ -170,11 +202,7 @@
   function buildMappingUI() {
     const grid = el("mappingGrid");
     grid.innerHTML = "";
-    const auto = {};
-    state.headers.forEach(h => {
-      const guess = guessField(h);
-      if (guess && !auto[guess]) auto[guess] = h;
-    });
+    const auto = detectMapping(state.headers);
 
     FIELDS.forEach(f => {
       const wrap = document.createElement("div");
@@ -245,10 +273,18 @@
         quantity: quantity ?? 0,
         price: price ?? 0,
         revenue,
+        status: m.status ? String(row[m.status] ?? "").trim() : "",
       });
     }
     records.sort((a, b) => a.date - b.date);
     state.records = records;
+  }
+
+  const CANCELLED_STATUS_WORDS = ["huy", "hoan tien", "hoan tra", "tra hang", "refund", "cancel"];
+  function isCancelledStatus(status) {
+    if (!status) return false;
+    const n = stripDiacritics(status);
+    return CANCELLED_STATUS_WORDS.some(w => n.includes(w));
   }
 
   /* ---------------- Filters ---------------- */
@@ -269,9 +305,14 @@
       el("filterTo").value = toInputDate(maxD);
     }
 
+    const hasStatus = !!state.mapping.status;
+    el("filterCancelledWrap").hidden = !hasStatus;
+    el("filterExcludeCancelled").checked = true;
+
     el("filterFrom").onchange = applyFiltersAndRender;
     el("filterTo").onchange = applyFiltersAndRender;
     el("filterCategory").onchange = applyFiltersAndRender;
+    el("filterExcludeCancelled").onchange = applyFiltersAndRender;
     el("btnClearFilter").onclick = () => {
       el("filterFrom").value = state.records.length ? toInputDate(state.records[0].date) : "";
       el("filterTo").value = state.records.length ? toInputDate(state.records[state.records.length - 1].date) : "";
@@ -290,17 +331,29 @@
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   }
 
-  function applyFiltersAndRender() {
-    const from = el("filterFrom").value ? new Date(el("filterFrom").value) : null;
-    const to = el("filterTo").value ? new Date(el("filterTo").value) : null;
-    const cat = el("filterCategory").value;
+  // <input type="date"> values are plain "YYYY-MM-DD" strings; `new Date(str)` would
+  // parse that as UTC midnight, which drifts against the local-time dates records use.
+  function parseInputDate(value) {
+    if (!value) return null;
+    const [y, m, d] = value.split("-").map(Number);
+    return new Date(y, m - 1, d);
+  }
 
+  function applyFiltersAndRender() {
+    const from = parseInputDate(el("filterFrom").value);
+    const to = parseInputDate(el("filterTo").value);
+    const cat = el("filterCategory").value;
+    const excludeCancelled = !!state.mapping.status && el("filterExcludeCancelled").checked;
+
+    let excludedCount = 0;
     state.filtered = state.records.filter(r => {
       if (from && r.date < from) return false;
       if (to && r.date > new Date(to.getFullYear(), to.getMonth(), to.getDate(), 23, 59, 59)) return false;
       if (cat && r.category !== cat) return false;
+      if (excludeCancelled && isCancelledStatus(r.status)) { excludedCount++; return false; }
       return true;
     });
+    state.excludedCancelledCount = excludedCount;
 
     state.page = 1;
     renderKPIs();
@@ -321,7 +374,10 @@
     el("kpiQty").textContent = fmtNumber(totalQty);
     el("kpiAvg").textContent = fmtNumber(avg);
 
-    el("kpiRevenueSub").textContent = `${data.length.toLocaleString("vi-VN")} dòng dữ liệu`;
+    const excluded = state.excludedCancelledCount || 0;
+    el("kpiRevenueSub").textContent = excluded
+      ? `${data.length.toLocaleString("vi-VN")} dòng · đã loại ${excluded.toLocaleString("vi-VN")} đơn hủy/hoàn trả`
+      : `${data.length.toLocaleString("vi-VN")} dòng dữ liệu`;
     el("kpiOrdersSub").textContent = "trong khoảng đã lọc";
     el("kpiQtySub").textContent = "tổng số lượng bán";
     el("kpiAvgSub").textContent = "doanh thu / dòng";
@@ -337,8 +393,12 @@
   function renderCharts() {
     renderTimelineChart();
     renderTopProductsChart();
-    renderCategoryChart();
-    renderTopCustomersChart();
+
+    el("cardCategory").hidden = !state.mapping.category;
+    if (state.mapping.category) renderCategoryChart();
+
+    el("cardTopCustomers").hidden = !state.mapping.customer;
+    if (state.mapping.customer) renderTopCustomersChart();
   }
 
   function renderTimelineChart() {

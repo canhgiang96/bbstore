@@ -74,6 +74,10 @@
         <label>Danh mục</label>
         <select id="filterCategory"><option value="">Tất cả</option></select>
       </div>
+      <label class="filter-checkbox" id="filterCancelledWrap" hidden>
+        <input type="checkbox" id="filterExcludeCancelled" checked />
+        Loại trừ đơn đã hủy / hoàn trả
+      </label>
       <button id="btnClearFilter" class="btn btn-ghost">Xóa lọc</button>
     </div>
 
@@ -109,11 +113,11 @@
         <h3>Top sản phẩm theo doanh thu</h3>
         <canvas id="chartTopProducts"></canvas>
       </div>
-      <div class="card chart-card">
+      <div class="card chart-card" id="cardCategory">
         <h3>Doanh thu theo danh mục</h3>
         <canvas id="chartCategory"></canvas>
       </div>
-      <div class="card chart-card">
+      <div class="card chart-card" id="cardTopCustomers">
         <h3>Top khách hàng</h3>
         <canvas id="chartTopCustomers"></canvas>
       </div>
