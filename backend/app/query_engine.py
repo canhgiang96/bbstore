@@ -20,7 +20,8 @@ DETAIL_COLUMNS = [
     "date", "orderId", "sku", "skuVariant", "product", "category", "customer",
     "quantity", "returnedQty", "soLuongThuc", "price", "originalPrice",
     "revenue", "doanhSo", "status", "trangThai", "discount", "voucher",
-    "platformFee", "piship", "phiAff",
+    "platformFee", "piship", "phiAff", "phanLoaiKho", "phanLoaiMuc",
+    "phanLoaiSp", "giaVon",
 ]
 
 ALLOWED_SORT_COLUMNS = {
@@ -34,13 +35,16 @@ EMPTY_SUMMARY = {
     "kpis": {
         "doanhSo": 0, "gmv": 0, "huyChuaXK": 0, "huySauXK": 0, "hoan": 0,
         "discount": 0, "voucher": 0, "platformFee": 0, "piship": 0, "phiAff": 0,
-        "doanhThuThuan": 0, "nmv": 0, "rowCount": 0,
+        "doanhThuThuan": 0, "nmv": 0, "giaVon": 0, "loiNhuanGop": 0, "rowCount": 0,
     },
     "timeline": [],
     "topProducts": [],
     "categoryBreakdown": [],
     "topCustomers": [],
-    "facets": {"categories": [], "statuses": []},
+    "facets": {
+        "categories": [], "statuses": [],
+        "warehouseTypes": [], "itemGroups": [], "productTypes": [],
+    },
 }
 
 
@@ -76,7 +80,10 @@ def _is_empty_source(parquet_source) -> bool:
     return isinstance(parquet_source, (list, tuple)) and len(parquet_source) == 0
 
 
-def _where_clause(from_date=None, to_date=None, category=None, status=None):
+def _where_clause(
+    from_date=None, to_date=None, category=None, status=None,
+    warehouse_type=None, item_group=None, product_type=None, sku=None,
+):
     clauses = []
     params: list = []
     if from_date:
@@ -97,6 +104,19 @@ def _where_clause(from_date=None, to_date=None, category=None, status=None):
     if status:
         clauses.append('"trangThai" = ?')
         params.append(status)
+    if warehouse_type:
+        clauses.append('"phanLoaiKho" = ?')
+        params.append(warehouse_type)
+    if item_group:
+        clauses.append('"phanLoaiMuc" = ?')
+        params.append(item_group)
+    if product_type:
+        clauses.append('"phanLoaiSp" = ?')
+        params.append(product_type)
+    if sku:
+        clauses.append('(lower("sku") LIKE ? OR lower("skuVariant") LIKE ?)')
+        like = f"%{sku.lower()}%"
+        params.extend([like, like])
     return (" AND ".join(clauses) if clauses else "1=1"), params
 
 
@@ -156,7 +176,41 @@ def _cashflow_agg_join(available: set, cashflow_source) -> tuple[str, list, str]
     return join_sql, [cashflow_source], aff_expr
 
 
-def _build_orders_working(con, parquet_source, available: set, combo_source, cashflow_source) -> None:
+def _master_join(master_source, sku_variant_expr: str) -> tuple[str, list, str, str, str, str]:
+    """Returns (join_sql, join_params, muc_expr, phan_loai_sp_expr,
+    phan_loai_kho_expr, gia_von_expr) to LEFT JOIN Master File cost/category
+    data into an Orders query, aliased "mf" — joined on the parent SKU of
+    the ALREADY-exploded skuVariant (post Combo explosion, if any), matching
+    the confirmed "combo children still look up their own Giá vốn" rule.
+
+    A parent SKU can appear on more than one Master File row (color/size
+    variants each have their own "SKU phân loại" but share "SKU") — ANY_VALUE
+    picks one consistently per field rather than fanning out rows, unlike
+    the Combo join. When master_source is empty, the 4 expressions are
+    literal defaults ('' / 0) that don't reference "mf" at all — same
+    unconditionally-safe pattern as _combo_join/_cashflow_agg_join, since no
+    "mf" alias exists in the query in that case.
+    """
+    if not master_source:
+        return "", [], "''", "''", "''", "0"
+    join_sql = (
+        'LEFT JOIN ('
+        'SELECT "sku" AS mf_sku, ANY_VALUE("muc") AS mf_muc, '
+        'ANY_VALUE("phanLoaiSp") AS mf_phan_loai_sp, ANY_VALUE("phanLoaiKho") AS mf_phan_loai_kho, '
+        'ANY_VALUE("giaVon") AS mf_gia_von '
+        'FROM read_parquet(?, union_by_name=true) GROUP BY "sku"'
+        f") mf ON split_part({sku_variant_expr}, '-', 1) = mf.mf_sku"
+    )
+    return (
+        join_sql, [master_source],
+        "COALESCE(mf.mf_muc, '')", "COALESCE(mf.mf_phan_loai_sp, '')",
+        "COALESCE(mf.mf_phan_loai_kho, '')", "COALESCE(mf.mf_gia_von, 0)",
+    )
+
+
+def _build_orders_working(
+    con, parquet_source, available: set, combo_source, cashflow_source, master_source,
+) -> None:
     """Materializes a TEMP TABLE "orders_working" combining the Combo
     explosion and the Phí AFF join exactly once per call — every query below
     (totals, timeline, top_n, facets, count, the paginated rows select) then
@@ -176,6 +230,17 @@ def _build_orders_working(con, parquet_source, available: set, combo_source, cas
 
     combo_join_sql, combo_params, sku_variant_expr, ratio_expr, slot_expr = _combo_join(combo_source)
     cashflow_join_sql, cashflow_params, aff_expr = _cashflow_agg_join(available, cashflow_source)
+    master_join_sql, master_params, muc_expr, phan_loai_sp_expr, phan_loai_kho_expr, gia_von_expr = _master_join(
+        master_source, sku_variant_expr
+    )
+
+    # Combo-exploded children report "combo" for the 3 category labels
+    # instead of a Master File lookup (confirmed with the user) — Giá vốn
+    # still looks up normally via the child's own sub-SKU.
+    is_combo_child = f"({slot_expr} IS NOT NULL)"
+    warehouse_expr = f"CASE WHEN {is_combo_child} THEN 'combo' ELSE {phan_loai_kho_expr} END"
+    item_group_expr = f"CASE WHEN {is_combo_child} THEN 'combo' ELSE {muc_expr} END"
+    product_type_expr = f"CASE WHEN {is_combo_child} THEN 'combo' ELSE {phan_loai_sp_expr} END"
 
     create_sql = f"""
         CREATE TEMP TABLE orders_working AS
@@ -200,26 +265,34 @@ def _build_orders_working(con, parquet_source, available: set, combo_source, cas
           {voucher_col} * {ratio_expr} AS "voucher",
           {platform_fee_col} * {ratio_expr} AS "platformFee",
           CASE WHEN {slot_expr} IS NULL OR {slot_expr} = 1 THEN {piship_col} ELSE 0 END AS "piship",
-          ({aff_expr}) * {ratio_expr} AS "phiAff"
+          ({aff_expr}) * {ratio_expr} AS "phiAff",
+          {warehouse_expr} AS "phanLoaiKho",
+          {item_group_expr} AS "phanLoaiMuc",
+          {product_type_expr} AS "phanLoaiSp",
+          o."soLuongThuc" * {gia_von_expr} AS "giaVon"
         FROM read_parquet(?, union_by_name=true) o
         {combo_join_sql}
         {cashflow_join_sql}
+        {master_join_sql}
     """
-    con.execute(create_sql, [*[parquet_source], *combo_params, *cashflow_params])
+    con.execute(create_sql, [*[parquet_source], *combo_params, *cashflow_params, *master_params])
 
 
 def run_summary_query(
     parquet_source, from_date=None, to_date=None, category=None, status=None,
-    cashflow_source=None, combo_source=None,
+    cashflow_source=None, combo_source=None, master_source=None,
+    warehouse_type=None, item_group=None, product_type=None, sku=None,
 ) -> dict:
     if _is_empty_source(parquet_source):
         return EMPTY_SUMMARY
 
     con = _connect()
     try:
-        where_sql, params = _where_clause(from_date, to_date, category, status)
+        where_sql, params = _where_clause(
+            from_date, to_date, category, status, warehouse_type, item_group, product_type, sku,
+        )
         available = _available_columns(con, parquet_source)
-        _build_orders_working(con, parquet_source, available, combo_source, cashflow_source)
+        _build_orders_working(con, parquet_source, available, combo_source, cashflow_source, master_source)
 
         totals_sql = f"""
             SELECT
@@ -233,15 +306,18 @@ def run_summary_query(
               COALESCE(SUM("platformFee"), 0) AS platform_fee,
               COALESCE(SUM("piship"), 0) AS piship,
               COALESCE(SUM("phiAff"), 0) AS phi_aff,
+              COALESCE(SUM("giaVon"), 0) AS gia_von,
               COUNT(*) AS row_count
             FROM orders_working
             WHERE {where_sql}
         """
-        total, gmv, huy_chua_xk, huy_sau_xk, hoan, discount, voucher, platform_fee, piship, phi_aff, row_count = con.execute(
-            totals_sql, params
-        ).fetchone()
+        (
+            total, gmv, huy_chua_xk, huy_sau_xk, hoan, discount, voucher,
+            platform_fee, piship, phi_aff, gia_von, row_count,
+        ) = con.execute(totals_sql, params).fetchone()
         doanh_thu_thuan = gmv - discount - voucher
         nmv = doanh_thu_thuan - platform_fee - piship - phi_aff
+        loi_nhuan_gop = nmv - gia_von
 
         timeline_sql = f"""
             SELECT strftime("date", '%Y-%m') AS month, SUM("doanhSo") AS value
@@ -267,10 +343,13 @@ def run_summary_query(
         facets_sql = """
             SELECT
               list(DISTINCT "category") AS categories,
-              list(DISTINCT "trangThai") AS statuses
+              list(DISTINCT "trangThai") AS statuses,
+              list(DISTINCT "phanLoaiKho") AS warehouse_types,
+              list(DISTINCT "phanLoaiMuc") AS item_groups,
+              list(DISTINCT "phanLoaiSp") AS product_types
             FROM orders_working
         """
-        categories, statuses = con.execute(facets_sql).fetchone()
+        categories, statuses, warehouse_types, item_groups, product_types = con.execute(facets_sql).fetchone()
 
         return {
             "kpis": {
@@ -286,6 +365,8 @@ def run_summary_query(
                 "phiAff": phi_aff,
                 "doanhThuThuan": doanh_thu_thuan,
                 "nmv": nmv,
+                "giaVon": gia_von,
+                "loiNhuanGop": loi_nhuan_gop,
                 "rowCount": row_count,
             },
             "timeline": [{"month": m, "value": v} for m, v in timeline],
@@ -295,6 +376,9 @@ def run_summary_query(
             "facets": {
                 "categories": sorted(c for c in (categories or []) if c is not None),
                 "statuses": [s for s in (statuses or []) if s is not None],
+                "warehouseTypes": sorted(w for w in (warehouse_types or []) if w),
+                "itemGroups": sorted(g for g in (item_groups or []) if g),
+                "productTypes": sorted(p for p in (product_types or []) if p),
             },
         }
     finally:
@@ -305,7 +389,8 @@ def run_rows_query(
     parquet_source,
     from_date=None, to_date=None, category=None, status=None,
     search=None, sort="date", sort_dir="asc", page=1, page_size=15,
-    cashflow_source=None, combo_source=None,
+    cashflow_source=None, combo_source=None, master_source=None,
+    warehouse_type=None, item_group=None, product_type=None, sku=None,
 ) -> dict:
     page = max(1, page)
     if _is_empty_source(parquet_source):
@@ -313,9 +398,11 @@ def run_rows_query(
 
     con = _connect()
     try:
-        where_sql, params = _where_clause(from_date, to_date, category, status)
+        where_sql, params = _where_clause(
+            from_date, to_date, category, status, warehouse_type, item_group, product_type, sku,
+        )
         available = _available_columns(con, parquet_source)
-        _build_orders_working(con, parquet_source, available, combo_source, cashflow_source)
+        _build_orders_working(con, parquet_source, available, combo_source, cashflow_source, master_source)
 
         if search:
             where_sql += (

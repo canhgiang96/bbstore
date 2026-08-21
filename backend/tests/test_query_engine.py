@@ -568,3 +568,129 @@ def test_rows_combo_and_cashflow_together_phi_aff_scales_by_combo_ratio_too(
         assert by_sku["B200-1"]["phiAff"] == 1200
     finally:
         os.remove(cashflow_path)
+
+
+# ---- Master File cost/category lookup ----
+# parquet_path_with_discounts's "D1" order: A100-1 (soLuongThuc=2), B200-1
+# (soLuongThuc=1). Master File maps parent SKU "A100" -> Áo/Áo thun/Kho HN/
+# giá vốn 10.000, and "B200" -> Quần/Quần short/Kho HCM/giá vốn 20.000.
+
+def _write_master_parquet(rows: list[dict]) -> str:
+    return _write_raw_parquet(rows)
+
+
+@pytest.fixture
+def master_parquet_path():
+    path = _write_master_parquet([
+        {"sku": "A100", "muc": "Áo", "phanLoaiSp": "Áo thun", "phanLoaiKho": "Kho HN", "giaVon": 10000.0},
+        {"sku": "B200", "muc": "Quần", "phanLoaiSp": "Quần short", "phanLoaiKho": "Kho HCM", "giaVon": 20000.0},
+    ])
+    yield path
+    os.remove(path)
+
+
+def test_rows_master_file_lookup_by_parent_sku(parquet_path_with_discounts, master_parquet_path):
+    result = run_rows_query(parquet_path_with_discounts, page_size=10, master_source=[master_parquet_path])
+    by_sku = {r["skuVariant"]: r for r in result["rows"]}
+
+    assert by_sku["A100-1"]["phanLoaiKho"] == "Kho HN"
+    assert by_sku["A100-1"]["phanLoaiMuc"] == "Áo"
+    assert by_sku["A100-1"]["phanLoaiSp"] == "Áo thun"
+    assert by_sku["A100-1"]["giaVon"] == 2 * 10000  # soLuongThuc x giá vốn
+
+    assert by_sku["B200-1"]["phanLoaiKho"] == "Kho HCM"
+    assert by_sku["B200-1"]["giaVon"] == 1 * 20000
+
+
+def test_rows_combo_children_get_combo_label_but_real_gia_von(
+    parquet_path_with_discounts, combo_parquet_path,
+):
+    # X1/X2 (the exploded children's parent SKUs) have their own Master File
+    # entries — Giá vốn must still look them up; the 3 label fields must not.
+    master_path = _write_master_parquet([
+        {"sku": "X1", "muc": "Áo", "phanLoaiSp": "Áo thun", "phanLoaiKho": "Kho HN", "giaVon": 5000.0},
+        {"sku": "X2", "muc": "Quần", "phanLoaiSp": "Quần short", "phanLoaiKho": "Kho HCM", "giaVon": 7000.0},
+    ])
+    try:
+        result = run_rows_query(
+            parquet_path_with_discounts, page_size=10,
+            combo_source=[combo_parquet_path], master_source=[master_path],
+        )
+        by_sku = {r["skuVariant"]: r for r in result["rows"]}
+
+        assert by_sku["X1-1"]["phanLoaiKho"] == "combo"
+        assert by_sku["X1-1"]["phanLoaiMuc"] == "combo"
+        assert by_sku["X1-1"]["phanLoaiSp"] == "combo"
+        assert by_sku["X1-1"]["giaVon"] == 2 * 5000  # soLuongThuc (unscaled) x its own giá vốn
+
+        assert by_sku["X2-1"]["phanLoaiKho"] == "combo"
+        assert by_sku["X2-1"]["giaVon"] == 2 * 7000
+    finally:
+        os.remove(master_path)
+
+
+def test_rows_no_master_match_defaults_to_blank_and_zero(parquet_path_with_discounts, master_parquet_path):
+    # "C300-1" (parent "C300") has no Master File entry.
+    extra_path = _write_master_parquet([{"sku": "ZZZ", "muc": "X", "phanLoaiSp": "X", "phanLoaiKho": "X", "giaVon": 1.0}])
+    try:
+        result = run_rows_query(parquet_path_with_discounts, page_size=10, master_source=[extra_path])
+        for r in result["rows"]:
+            assert r["phanLoaiKho"] == ""
+            assert r["phanLoaiMuc"] == ""
+            assert r["phanLoaiSp"] == ""
+            assert r["giaVon"] == 0
+    finally:
+        os.remove(extra_path)
+
+
+def test_rows_no_master_data_uploaded_defaults_same_as_no_match(parquet_path_with_discounts):
+    result = run_rows_query(parquet_path_with_discounts, page_size=10, master_source=None)
+    for r in result["rows"]:
+        assert r["phanLoaiKho"] == ""
+        assert r["giaVon"] == 0
+
+
+def test_rows_duplicate_parent_sku_across_master_rows_does_not_duplicate_orders_rows(
+    parquet_path_with_discounts,
+):
+    # Two Master File rows share parent SKU "A100" (e.g. two colour variants)
+    # — ANY_VALUE must pick one consistently, and this must NOT multiply the
+    # matching Orders row the way a Combo join intentionally does.
+    dup_path = _write_master_parquet([
+        {"sku": "A100", "muc": "Áo", "phanLoaiSp": "Áo thun", "phanLoaiKho": "Kho HN", "giaVon": 10000.0},
+        {"sku": "A100", "muc": "Áo", "phanLoaiSp": "Áo thun", "phanLoaiKho": "Kho HN", "giaVon": 10000.0},
+    ])
+    try:
+        result = run_rows_query(parquet_path_with_discounts, page_size=10, master_source=[dup_path])
+        assert result["total"] == 2  # still exactly 2 Orders rows, not fanned out
+    finally:
+        os.remove(dup_path)
+
+
+def test_summary_loi_nhuan_gop_reconciles_with_nmv_and_gia_von(parquet_path_with_discounts, master_parquet_path):
+    result = run_summary_query(parquet_path_with_discounts, master_source=[master_parquet_path])
+    kpis = result["kpis"]
+    assert kpis["giaVon"] == 2 * 10000 + 1 * 20000  # 40000
+    assert kpis["loiNhuanGop"] == kpis["nmv"] - kpis["giaVon"]
+
+
+def test_rows_new_filters_narrow_by_master_file_categories_and_sku(
+    parquet_path_with_discounts, master_parquet_path,
+):
+    result_kho = run_rows_query(
+        parquet_path_with_discounts, page_size=10, master_source=[master_parquet_path], warehouse_type="Kho HN",
+    )
+    assert {r["skuVariant"] for r in result_kho["rows"]} == {"A100-1"}
+
+    result_muc = run_rows_query(
+        parquet_path_with_discounts, page_size=10, master_source=[master_parquet_path], item_group="Quần",
+    )
+    assert {r["skuVariant"] for r in result_muc["rows"]} == {"B200-1"}
+
+    result_product_type = run_rows_query(
+        parquet_path_with_discounts, page_size=10, master_source=[master_parquet_path], product_type="Áo thun",
+    )
+    assert {r["skuVariant"] for r in result_product_type["rows"]} == {"A100-1"}
+
+    result_sku = run_rows_query(parquet_path_with_discounts, page_size=10, sku="a100")
+    assert {r["skuVariant"] for r in result_sku["rows"]} == {"A100-1"}

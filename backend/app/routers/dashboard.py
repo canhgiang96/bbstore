@@ -65,20 +65,39 @@ async def _all_ready_combo_parquet_paths() -> list:
     return [get_local_parquet(r["id"], r["parquet_key"]) for r in reports if r.get("parquet_key")]
 
 
+async def _all_ready_master_parquet_paths() -> list:
+    """Every ready Master File Report's Parquet — used to look up cost/
+    category data for Orders rows by parent SKU at query time (see
+    query_engine._master_join). Same query-time rationale and best-effort
+    []-on-error fallback as Cashflow/Combo.
+    """
+    try:
+        reports = await db.pg_select("master_reports", {"status": "eq.ready", "select": "id,parquet_key"})
+    except Exception:  # noqa: BLE001 — cost/category lookup is best-effort, never worth 500ing the whole Dashboard for
+        return []
+    return [get_local_parquet(r["id"], r["parquet_key"]) for r in reports if r.get("parquet_key")]
+
+
 @dashboard_router.get("/summary", response_model=SummaryOut)
 async def dashboard_summary(
     from_: Optional[str] = Query(None, alias="from"),
     to: Optional[str] = None,
     category: Optional[str] = None,
     status: Optional[str] = None,
+    warehouseType: Optional[str] = None,
+    itemGroup: Optional[str] = None,
+    productType: Optional[str] = None,
+    sku: Optional[str] = None,
     user: dict = Depends(get_current_user),
 ):
     paths = await _all_ready_parquet_paths()
     cashflow_paths = await _all_ready_cashflow_parquet_paths()
     combo_paths = await _all_ready_combo_parquet_paths()
+    master_paths = await _all_ready_master_parquet_paths()
     return run_summary_query(
         paths, from_date=from_, to_date=to, category=category, status=status,
-        cashflow_source=cashflow_paths, combo_source=combo_paths,
+        cashflow_source=cashflow_paths, combo_source=combo_paths, master_source=master_paths,
+        warehouse_type=warehouseType, item_group=itemGroup, product_type=productType, sku=sku,
     )
 
 
@@ -88,6 +107,10 @@ async def dashboard_rows(
     to: Optional[str] = None,
     category: Optional[str] = None,
     status: Optional[str] = None,
+    warehouseType: Optional[str] = None,
+    itemGroup: Optional[str] = None,
+    productType: Optional[str] = None,
+    sku: Optional[str] = None,
     search: Optional[str] = None,
     sort: str = "date",
     sort_dir: str = "asc",
@@ -98,10 +121,12 @@ async def dashboard_rows(
     paths = await _all_ready_parquet_paths()
     cashflow_paths = await _all_ready_cashflow_parquet_paths()
     combo_paths = await _all_ready_combo_parquet_paths()
+    master_paths = await _all_ready_master_parquet_paths()
     return run_rows_query(
         paths, from_date=from_, to_date=to, category=category, status=status,
         search=search, sort=sort, sort_dir=sort_dir, page=page, page_size=pageSize,
-        cashflow_source=cashflow_paths, combo_source=combo_paths,
+        cashflow_source=cashflow_paths, combo_source=combo_paths, master_source=master_paths,
+        warehouse_type=warehouseType, item_group=itemGroup, product_type=productType, sku=sku,
     )
 
 
@@ -112,15 +137,21 @@ async def summary(
     to: Optional[str] = None,
     category: Optional[str] = None,
     status: Optional[str] = None,
+    warehouseType: Optional[str] = None,
+    itemGroup: Optional[str] = None,
+    productType: Optional[str] = None,
+    sku: Optional[str] = None,
     user: dict = Depends(get_current_user),
 ):
     report = await _get_ready_report(report_id)
     path = get_local_parquet(report_id, report["parquet_key"])
     cashflow_paths = await _all_ready_cashflow_parquet_paths()
     combo_paths = await _all_ready_combo_parquet_paths()
+    master_paths = await _all_ready_master_parquet_paths()
     return run_summary_query(
         path, from_date=from_, to_date=to, category=category, status=status,
-        cashflow_source=cashflow_paths, combo_source=combo_paths,
+        cashflow_source=cashflow_paths, combo_source=combo_paths, master_source=master_paths,
+        warehouse_type=warehouseType, item_group=itemGroup, product_type=productType, sku=sku,
     )
 
 
@@ -131,6 +162,10 @@ async def rows(
     to: Optional[str] = None,
     category: Optional[str] = None,
     status: Optional[str] = None,
+    warehouseType: Optional[str] = None,
+    itemGroup: Optional[str] = None,
+    productType: Optional[str] = None,
+    sku: Optional[str] = None,
     search: Optional[str] = None,
     sort: str = "date",
     sort_dir: str = "asc",
@@ -142,8 +177,10 @@ async def rows(
     path = get_local_parquet(report_id, report["parquet_key"])
     cashflow_paths = await _all_ready_cashflow_parquet_paths()
     combo_paths = await _all_ready_combo_parquet_paths()
+    master_paths = await _all_ready_master_parquet_paths()
     return run_rows_query(
         path, from_date=from_, to_date=to, category=category, status=status,
         search=search, sort=sort, sort_dir=sort_dir, page=page, page_size=pageSize,
-        cashflow_source=cashflow_paths, combo_source=combo_paths,
+        cashflow_source=cashflow_paths, combo_source=combo_paths, master_source=master_paths,
+        warehouse_type=warehouseType, item_group=itemGroup, product_type=productType, sku=sku,
     )

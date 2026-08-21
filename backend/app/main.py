@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from .routers import auth, cashflow_reports, combo_reports, dashboard, reports
+from .routers import auth, cashflow_reports, combo_reports, dashboard, master_reports, reports
 
 app = FastAPI(title="BBStore Dashboard API")
 
@@ -13,6 +13,7 @@ app.include_router(auth.router)
 app.include_router(reports.router)
 app.include_router(cashflow_reports.router)
 app.include_router(combo_reports.router)
+app.include_router(master_reports.router)
 app.include_router(dashboard.router)
 app.include_router(dashboard.dashboard_router)
 

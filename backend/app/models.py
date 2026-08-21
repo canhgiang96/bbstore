@@ -68,6 +68,8 @@ class KpiOut(BaseModel):
     phiAff: float
     doanhThuThuan: float
     nmv: float
+    giaVon: float
+    loiNhuanGop: float
     rowCount: int
 
 
@@ -84,6 +86,9 @@ class TimelinePoint(BaseModel):
 class FacetsOut(BaseModel):
     categories: list[str]
     statuses: list[str]
+    warehouseTypes: list[str]
+    itemGroups: list[str]
+    productTypes: list[str]
 
 
 class SummaryOut(BaseModel):

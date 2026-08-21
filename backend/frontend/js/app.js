@@ -47,13 +47,8 @@
   const UNTAGGED_BATCH_LABEL = "(Thêm thủ công / không rõ nguồn)";
   function batchLabel(row) { return row.__sourceFile || UNTAGGED_BATCH_LABEL; }
 
-  /* ================= Store metadata (Master/Điều chỉnh — Orders, Dòng tiền and Combo are API-backed, not a generic store) ================= */
+  /* ================= Store metadata (Điều chỉnh — Orders, Dòng tiền, Combo and Master File are API-backed, not a generic store) ================= */
   const STORE_META = {
-    master: {
-      label: "Master File",
-      headers: ["SKU", "SKU phân loại", "Màu", "Size", "Mục", "Phân loại SP", "Phân loại kho ONL", "Gía vốn"],
-      primaryKeyHeader: "SKU phân loại",
-    },
     adjustments: {
       label: "Điều chỉnh doanh thu",
       headers: ["Mã giao dịch", "Ngày hoàn thành điều chỉnh đơn hàng", "Loại điều chỉnh | Mô tả", "Lý do điều chỉnh", "Số tiền điều chỉnh", "Mã đơn hàng liên quan", "Ngày hoàn thành thanh toán"],
@@ -655,6 +650,114 @@
     reports.filter(r => r.status === "processing").forEach(r => pollComboStatus(r.id));
   }
 
+  /* ================= Master File Reports tab (API-backed) — mirrors the
+     Combo tab above 1:1, pointed at /api/master-reports. Master File Reports
+     exist solely to supply Phân loại kho/mục/sản phẩm and Giá vốn for the
+     Orders Dashboard's query-time join, so uploading/deleting one also
+     refreshes the Dashboard. ================= */
+  let masterPollTimers = {};
+
+  function wireMasterTab() {
+    const dz = el("masterUploadDropzone");
+    const input = el("masterUploadInput");
+    if (!API.isAdmin()) {
+      dz.hidden = true;
+    } else {
+      ["dragenter", "dragover"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add("dragover"); }));
+      ["dragleave", "drop"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove("dragover"); }));
+      dz.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) handleMasterUpload(f); });
+      input.addEventListener("change", e => {
+        const f = e.target.files[0];
+        if (f) handleMasterUpload(f);
+        input.value = "";
+      });
+    }
+    refreshMasterReportsList();
+  }
+
+  async function handleMasterUpload(file) {
+    const box = el("masterUploadSummary");
+    box.className = "import-summary";
+    box.textContent = `Đang tải lên "${file.name}"...`;
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await API.apiFetch("/api/master-reports", { method: "POST", body: formData });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Lỗi ${res.status}`);
+      }
+      const created = await res.json();
+      box.className = "import-summary ok";
+      box.textContent = `Đã tải lên — đang xử lý...`;
+      await refreshMasterReportsList();
+      pollMasterStatus(created.id);
+    } catch (err) {
+      box.className = "import-summary err";
+      box.textContent = "Lỗi tải lên: " + err.message;
+    }
+  }
+
+  function pollMasterStatus(reportId) {
+    if (masterPollTimers[reportId]) clearInterval(masterPollTimers[reportId]);
+    masterPollTimers[reportId] = setInterval(async () => {
+      try {
+        const report = await API.apiJson(`/api/master-reports/${reportId}`);
+        if (report.status !== "processing") {
+          clearInterval(masterPollTimers[reportId]);
+          delete masterPollTimers[reportId];
+          await refreshMasterReportsList();
+          if (report.status === "ready") refreshDashboard(); // Giá vốn/category lookups now include it
+        }
+      } catch (e) { /* transient — keep polling */ }
+    }, 2500);
+  }
+
+  async function refreshMasterReportsList() {
+    const isAdmin = API.isAdmin();
+    let reports;
+    try {
+      reports = await API.apiJson("/api/master-reports");
+    } catch (e) {
+      el("masterReportsListBody").innerHTML = `<p class="muted">Không tải được danh sách Report: ${escapeHtml(e.message)}</p>`;
+      return;
+    }
+    el("masterReportsListCount").textContent = `${reports.length.toLocaleString("vi-VN")} Report`;
+
+    const body = el("masterReportsListBody");
+    if (!reports.length) {
+      body.innerHTML = `<p class="muted" style="padding:16px;">Chưa có Report nào.</p>`;
+      return;
+    }
+
+    body.innerHTML = `<div class="table-scroll"><table><thead><tr>
+        <th>Report</th><th>Trạng thái</th><th>Số dòng</th><th>Tải lên lúc</th>${isAdmin ? "<th>Thao tác</th>" : ""}
+      </tr></thead><tbody>` + reports.map(r => `
+        <tr>
+          <td>${escapeHtml(r.name)}</td>
+          <td>${STATUS_BADGE[r.status] || escapeHtml(r.status)}${r.status === "failed" && r.error_message ? `<div class="muted" style="margin-top:4px;">${escapeHtml(r.error_message)}</div>` : ""}</td>
+          <td>${r.row_count != null ? r.row_count.toLocaleString("vi-VN") : "–"}</td>
+          <td>${new Date(r.uploaded_at).toLocaleString("vi-VN")}</td>
+          ${isAdmin ? `<td><button class="btn btn-danger btn-sm" data-del="${escapeHtml(r.id)}">Xóa</button></td>` : ""}
+        </tr>
+      `).join("") + `</tbody></table></div>`;
+
+    if (isAdmin) {
+      body.querySelectorAll("button[data-del]").forEach(btn => {
+        btn.onclick = async () => {
+          const id = btn.dataset.del;
+          const report = reports.find(r => r.id === id);
+          if (!confirm(`Xóa toàn bộ Report "${report ? report.name : id}"? Hành động này không thể hoàn tác.`)) return;
+          await API.apiJson(`/api/master-reports/${id}`, { method: "DELETE" });
+          await refreshMasterReportsList();
+          refreshDashboard();
+        };
+      });
+    }
+
+    reports.filter(r => r.status === "processing").forEach(r => pollMasterStatus(r.id));
+  }
+
   /* ================= Dashboard (aggregates every ready Report — see
      /api/dashboard/summary + /rows; the date/category/status filters below
      are how the user narrows the view, not a per-Report picker) ================= */
@@ -667,7 +770,6 @@
     tableSort: "date",
     tableSortDir: "asc",
     filtersWired: false,
-    charts: {},
     summarySeq: 0,
     rowsSeq: 0,
   };
@@ -708,9 +810,17 @@
     const from = el("filterFrom").value;
     const to = el("filterTo").value;
     const status = el("filterStatus").value;
+    const warehouseType = el("filterWarehouseType").value;
+    const itemGroup = el("filterItemGroup").value;
+    const productType = el("filterProductType").value;
+    const sku = el("filterSku").value.trim();
     if (from) params.set("from", from);
     if (to) params.set("to", to);
     if (status) params.set("status", status);
+    if (warehouseType) params.set("warehouseType", warehouseType);
+    if (itemGroup) params.set("itemGroup", itemGroup);
+    if (productType) params.set("productType", productType);
+    if (sku) params.set("sku", sku);
     Object.entries(extra || {}).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== "") params.set(k, v); });
     return params;
   }
@@ -725,6 +835,10 @@
       el("filterFrom").value = "";
       el("filterTo").value = "";
       el("filterStatus").value = "";
+      el("filterWarehouseType").value = "";
+      el("filterItemGroup").value = "";
+      el("filterProductType").value = "";
+      el("filterSku").value = "";
       applyFiltersAndRender();
     };
     el("tableSearch").oninput = e => {
@@ -750,7 +864,6 @@
       if (seq !== dash.summarySeq) return; // a newer request already superseded this one
       renderKPIs(summary.kpis);
       renderFacets(summary.facets);
-      renderCharts(summary);
     } catch (err) {
       console.error("Dashboard summary fetch failed:", err);
     }
@@ -774,8 +887,8 @@
     }
   }
 
-  // Status dropdown is rebuilt from the (unfiltered) summary response each
-  // time, but the user's current selection is preserved if still valid.
+  // Dropdowns are rebuilt from the (unfiltered) summary response each time,
+  // but the user's current selection is preserved if still valid.
   function renderFacets(facets) {
     const statusSel = el("filterStatus");
     const curStatus = statusSel.value;
@@ -783,6 +896,18 @@
     const statuses = [...facets.statuses].sort((a, b) => STATUS_ORDER.indexOf(a) - STATUS_ORDER.indexOf(b));
     statusSel.innerHTML = '<option value="">Tất cả</option>' + statuses.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("");
     if (facets.statuses.includes(curStatus)) statusSel.value = curStatus;
+
+    renderSimpleFacet("filterWarehouseType", facets.warehouseTypes);
+    renderSimpleFacet("filterItemGroup", facets.itemGroups);
+    renderSimpleFacet("filterProductType", facets.productTypes);
+  }
+
+  function renderSimpleFacet(selectId, values) {
+    const sel = el(selectId);
+    const cur = sel.value;
+    const sorted = [...(values || [])].sort((a, b) => a.localeCompare(b, "vi"));
+    sel.innerHTML = '<option value="">Tất cả</option>' + sorted.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join("");
+    if (sorted.includes(cur)) sel.value = cur;
   }
 
   /* ---- KPIs ---- */
@@ -799,67 +924,9 @@
     el("kpiPlatformFee").textContent = fmtNumber(kpis.platformFee);
     el("kpiPiship").textContent = fmtNumber(kpis.piship);
     el("kpiPhiAff").textContent = fmtNumber(kpis.phiAff);
+    el("kpiGiaVon").textContent = fmtNumber(kpis.giaVon);
+    el("kpiLoiNhuanGop").textContent = fmtNumber(kpis.loiNhuanGop);
     el("kpiDoanhSoSub").textContent = `${kpis.rowCount.toLocaleString("vi-VN")} dòng dữ liệu`;
-  }
-
-  /* ---- Charts ---- */
-  const PALETTE = ["#3a5cf0", "#17a673", "#f0a53a", "#e34b4b", "#8a5cf0", "#3ac7f0", "#f06ab0", "#7cb342"];
-
-  function destroyChart(key) {
-    if (dash.charts[key]) { dash.charts[key].destroy(); delete dash.charts[key]; }
-  }
-
-  function baseOptions(scaleOverrides = {}, horizontalLabels = false) {
-    return {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { ticks: { autoSkip: true, maxRotation: horizontalLabels ? 30 : 0 } },
-        y: { beginAtZero: true, ...scaleOverrides.y },
-      },
-    };
-  }
-
-  function renderCharts(summary) {
-    destroyChart("timeline");
-    dash.charts.timeline = new Chart(el("chartTimeline"), {
-      type: "line",
-      data: {
-        labels: summary.timeline.map(p => p.month),
-        datasets: [{ label: "Doanh số", data: summary.timeline.map(p => p.value), borderColor: PALETTE[0], backgroundColor: "rgba(58,92,240,0.12)", fill: true, tension: 0.3, pointRadius: 3 }],
-      },
-      options: baseOptions({ y: { ticks: { callback: v => fmtNumber(v) } } }),
-    });
-
-    destroyChart("topProducts");
-    dash.charts.topProducts = new Chart(el("chartTopProducts"), {
-      type: "bar",
-      data: { labels: summary.topProducts.map(p => p.label), datasets: [{ label: "Doanh số", data: summary.topProducts.map(p => p.value), backgroundColor: PALETTE[0] }] },
-      options: baseOptions({ y: { ticks: { callback: v => fmtNumber(v) } } }, true),
-    });
-
-    const hasCategory = summary.categoryBreakdown.length > 0;
-    el("cardCategory").hidden = !hasCategory;
-    if (hasCategory) {
-      destroyChart("category");
-      dash.charts.category = new Chart(el("chartCategory"), {
-        type: "doughnut",
-        data: { labels: summary.categoryBreakdown.map(p => p.label), datasets: [{ data: summary.categoryBreakdown.map(p => p.value), backgroundColor: PALETTE }] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "right", labels: { boxWidth: 12, font: { size: 11 } } } } },
-      });
-    }
-
-    const hasCustomers = summary.topCustomers.length > 0;
-    el("cardTopCustomers").hidden = !hasCustomers;
-    if (hasCustomers) {
-      destroyChart("topCustomers");
-      dash.charts.topCustomers = new Chart(el("chartTopCustomers"), {
-        type: "bar",
-        data: { labels: summary.topCustomers.map(p => p.label), datasets: [{ label: "Doanh số", data: summary.topCustomers.map(p => p.value), backgroundColor: PALETTE[1] }] },
-        options: baseOptions({ y: { ticks: { callback: v => fmtNumber(v) } } }, true),
-      });
-    }
   }
 
   /* ---- Detail table ---- */
@@ -880,6 +947,10 @@
     { key: "platformFee", label: "Phí sàn", fmt: v => fmtNumber(v) },
     { key: "piship", label: "Phí Piship", fmt: v => fmtNumber(v) },
     { key: "phiAff", label: "Phí AFF", fmt: v => fmtNumber(v) },
+    { key: "phanLoaiKho", label: "Phân loại kho" },
+    { key: "phanLoaiMuc", label: "Phân loại mục" },
+    { key: "phanLoaiSp", label: "Phân loại sản phẩm" },
+    { key: "giaVon", label: "Giá vốn", fmt: v => fmtNumber(v) },
     { key: "trangThai", label: "Trạng thái" },
   ];
 
@@ -923,6 +994,7 @@
     wireOrdersTab();
     wireCashflowTab();
     wireComboTab();
+    wireMasterTab();
     showApp();
     refreshDashboard();
   }

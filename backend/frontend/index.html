@@ -6,7 +6,6 @@
 <title>Dashboard Kinh Doanh</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📊</text></svg>" />
 <link rel="stylesheet" href="css/style.css" />
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 </head>
 <body>
@@ -83,6 +82,22 @@
         <div class="filter-item filter-grow">
           <label>Trạng thái</label>
           <select id="filterStatus"><option value="">Tất cả</option></select>
+        </div>
+        <div class="filter-item filter-grow">
+          <label>Phân loại kho</label>
+          <select id="filterWarehouseType"><option value="">Tất cả</option></select>
+        </div>
+        <div class="filter-item filter-grow">
+          <label>Phân loại mục</label>
+          <select id="filterItemGroup"><option value="">Tất cả</option></select>
+        </div>
+        <div class="filter-item filter-grow">
+          <label>Phân loại sản phẩm</label>
+          <select id="filterProductType"><option value="">Tất cả</option></select>
+        </div>
+        <div class="filter-item filter-grow">
+          <label>SKU</label>
+          <input type="text" id="filterSku" placeholder="Tìm theo SKU..." />
         </div>
         <button id="btnApplyFilter" class="btn btn-primary" title="Tìm kiếm">🔍 Tìm kiếm</button>
         <button id="btnClearFilter" class="btn btn-ghost">Xóa lọc</button>
@@ -163,22 +178,19 @@
         </div>
       </div>
 
-      <div class="chart-grid">
-        <div class="card chart-card chart-wide">
-          <h3>Doanh số theo thời gian</h3>
-          <canvas id="chartTimeline"></canvas>
+      <div class="kpi-grid kpi-grid-1">
+        <div class="kpi-card">
+          <div class="kpi-label">Giá vốn</div>
+          <div class="kpi-value" id="kpiGiaVon">–</div>
+          <div class="kpi-sub">Số lượng thực x Giá vốn (Master File)</div>
         </div>
-        <div class="card chart-card">
-          <h3>Top sản phẩm theo doanh số</h3>
-          <canvas id="chartTopProducts"></canvas>
-        </div>
-        <div class="card chart-card" id="cardCategory">
-          <h3>Doanh số theo danh mục</h3>
-          <canvas id="chartCategory"></canvas>
-        </div>
-        <div class="card chart-card" id="cardTopCustomers">
-          <h3>Top khách hàng</h3>
-          <canvas id="chartTopCustomers"></canvas>
+      </div>
+
+      <div class="kpi-grid kpi-grid-1">
+        <div class="kpi-card">
+          <div class="kpi-label">Lợi nhuận gộp</div>
+          <div class="kpi-value" id="kpiLoiNhuanGop">–</div>
+          <div class="kpi-sub">NMV − Giá vốn</div>
         </div>
       </div>
 
@@ -274,8 +286,31 @@
     </div>
   </section>
 
-  <!-- ============ DATA MANAGER TABS (master, adjustments) ============ -->
-  <section class="tab-panel" id="panel-master" hidden></section>
+  <!-- ============ MASTER FILE REPORTS TAB (server-backed — supplies cost/category lookup for the Orders Dashboard's join) ============ -->
+  <section class="tab-panel" id="panel-master" hidden>
+    <div class="data-panel-header">
+      <h2>Master File — Report</h2>
+    </div>
+
+    <div class="drop-zone" id="masterUploadDropzone">
+      <div class="drop-zone-icon">📁</div>
+      <h2>Kéo thả file Excel vào đây</h2>
+      <p>hoặc</p>
+      <label class="btn btn-primary" for="masterUploadInput">Chọn file (.xlsx, .xls, .csv)</label>
+      <input type="file" id="masterUploadInput" accept=".xlsx,.xls,.csv" hidden />
+      <div class="import-summary" id="masterUploadSummary"></div>
+    </div>
+
+    <div class="card table-card">
+      <div class="table-card-header">
+        <h3>Danh sách Report</h3>
+        <span class="muted" id="masterReportsListCount"></span>
+      </div>
+      <div id="masterReportsListBody"></div>
+    </div>
+  </section>
+
+  <!-- ============ DATA MANAGER TABS (adjustments) ============ -->
   <section class="tab-panel" id="panel-adjustments" hidden></section>
 
 </main>
@@ -301,8 +336,8 @@
   </div>
 </div>
 
-<script src="js/db.js?v=15"></script>
-<script src="js/api.js?v=15"></script>
-<script src="js/app.js?v=15"></script>
+<script src="js/db.js?v=16"></script>
+<script src="js/api.js?v=16"></script>
+<script src="js/app.js?v=16"></script>
 </body>
 </html>
