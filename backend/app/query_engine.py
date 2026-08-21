@@ -27,7 +27,7 @@ ALLOWED_SORT_COLUMNS = {
     "quantity", "doanhSo", "trangThai",
 }
 
-GMV_STATUSES_SQL = "('Hoàn thành', 'Đang giao')"
+GMV_STATUSES_SQL = "('Hoàn thành', 'Đang giao', 'Hoàn 1 phần')"
 
 EMPTY_SUMMARY = {
     "kpis": {"doanhSo": 0, "gmv": 0, "huyChuaXK": 0, "huySauXK": 0, "hoan": 0, "discount": 0, "voucher": 0, "nmv": 0, "rowCount": 0},

@@ -55,7 +55,10 @@ def test_summary_kpis_match_expected(parquet_path):
     kpis = result["kpis"]
 
     assert kpis["doanhSo"] == 940000
-    assert kpis["gmv"] == 360000
+    # GMV now also includes "Hoàn 1 phần" rows, counted at their net
+    # (post-return) amount: O4 = 30000 * soLuongThuc(3) = 90000, added to
+    # O5 (200000, Hoàn thành) + O6 (160000, Đang giao) -> 450000.
+    assert kpis["gmv"] == 450000
     assert kpis["huyChuaXK"] == 150000
     assert kpis["huySauXK"] == 200000
     # Doanh số hoàn = Giá gốc x SL hoàn trả (not the full line's doanhSo) —
@@ -237,7 +240,7 @@ def test_summary_nmv_is_gmv_when_no_discount_or_voucher(parquet_path):
     # tiền người mua thanh toán" columns mapped, so discount/voucher are 0
     # for every row -> NMV should equal GMV exactly.
     result = run_summary_query(parquet_path)
-    assert result["kpis"]["nmv"] == result["kpis"]["gmv"] == 360000
+    assert result["kpis"]["nmv"] == result["kpis"]["gmv"] == 450000
 
 
 DISCOUNT_HEADERS = HEADERS + ["Người bán trợ giá", "Mã giảm giá của Shop", "Số tiền người mua thanh toán"]
