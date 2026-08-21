@@ -79,7 +79,10 @@ def _where_clause(from_date=None, to_date=None, category=None, status=None):
         clauses.append('"date" >= ?')
         params.append(from_date)
     if to_date:
-        clauses.append('"date" <= ?')
+        # to_date arrives as a plain "YYYY-MM-DD" (from <input type="date">),
+        # which would otherwise mean midnight — excluding every order placed
+        # later that same day, since "date" carries a real time-of-day.
+        clauses.append('"date" < (CAST(? AS DATE) + INTERVAL 1 DAY)')
         params.append(to_date)
     if category:
         clauses.append('"category" = ?')

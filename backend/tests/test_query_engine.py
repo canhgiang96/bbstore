@@ -78,6 +78,20 @@ def test_summary_category_filter(parquet_path):
     assert result["kpis"]["doanhSo"] == 200000 + 80000 + 200000
 
 
+def test_summary_to_date_is_inclusive_of_the_whole_day(parquet_path):
+    # Regression: "Đến ngày" comes from <input type="date"> as a plain
+    # "YYYY-MM-DD" (implicitly midnight). O1 is timestamped "2026-02-01
+    # 00:01" — one minute past that midnight — so a naive "date" <= to_date
+    # comparison would wrongly exclude it. to_date must mean end-of-day.
+    result = run_summary_query(parquet_path, to_date="2026-02-01")
+    assert result["kpis"]["rowCount"] == 1
+    assert result["kpis"]["doanhSo"] == 200000  # O1 only: 100000 * 2
+
+    # And it must not leak into the next day.
+    result_before = run_summary_query(parquet_path, to_date="2026-01-31")
+    assert result_before["kpis"]["rowCount"] == 0
+
+
 def test_top_products_sorted_desc(parquet_path):
     result = run_summary_query(parquet_path)
     values = [p["value"] for p in result["topProducts"]]
