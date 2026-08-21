@@ -793,14 +793,37 @@ def test_grouped_rows_invalid_group_by_returns_empty(parquet_path):
 
 
 def test_rows_drill_down_narrows_to_group(parquet_path):
-    result = run_rows_query(parquet_path, page_size=10, group_by="category", group_value="Áo")
+    result = run_rows_query(parquet_path, page_size=10, path_filters=[("category", "Áo")])
     assert result["total"] == 3
     assert {r["orderId"] for r in result["rows"]} == {"O1", "O3", "O5"}
 
 
 def test_rows_drill_down_invalid_group_by_ignored(parquet_path):
-    result = run_rows_query(parquet_path, page_size=10, group_by="not_a_real_column", group_value="Áo")
+    result = run_rows_query(parquet_path, page_size=10, path_filters=[("not_a_real_column", "Áo")])
     assert result["total"] == 6  # no filter applied — falls through untouched
+
+
+def test_rows_drill_down_multi_level_path_filters_all_apply(parquet_path):
+    # 2-level path: category="Áo" AND status="Hoàn thành" — only O5 matches
+    # both (O1/O3 are Áo but not Hoàn thành).
+    result = run_rows_query(
+        parquet_path, page_size=10,
+        path_filters=[("category", "Áo"), ("status", "Hoàn thành")],
+    )
+    assert result["total"] == 1
+    assert result["rows"][0]["orderId"] == "O5"
+
+
+def test_grouped_rows_path_filters_narrows_to_nested_ancestor(parquet_path):
+    # Nested grouping: level 1 = category, level 2 = status within "Áo".
+    # Áo orders: O1 (Hủy sau XK), O3 (Hoàn hàng), O5 (Hoàn thành) — 3 distinct
+    # statuses, each its own group of 1.
+    result = run_grouped_rows_query(
+        parquet_path, group_by="status", page_size=10, path_filters=[("category", "Áo")],
+    )
+    assert result["total"] == 3
+    assert {r["groupValue"] for r in result["rows"]} == {"Hủy sau XK", "Hoàn hàng", "Hoàn thành"}
+    assert all(r["rowCount"] == 1 for r in result["rows"])
 
 
 def test_export_query_ungrouped_returns_every_row_unpaginated(parquet_path):
@@ -858,3 +881,38 @@ def test_rows_warehouse_type_filter_accepts_list_of_values(parquet_path_with_dis
 def test_summary_status_filter_accepts_list_of_values(parquet_path):
     result = run_summary_query(parquet_path, status=["Hoàn thành", "Đang giao"])
     assert result["kpis"]["rowCount"] == 2
+
+
+# ---- Per-row GMV/Doanh thu thuần/NMV/Lợi nhuận gộp columns (Detail-table
+# "Cột hiển thị") — must reconcile with the KPI cards when summed, since
+# they use the exact same GMV-status scoping as run_summary_query's totals.
+
+def test_rows_gmv_column_excludes_non_gmv_statuses(parquet_path):
+    rows = run_export_query(parquet_path)
+    by_order = {r["orderId"]: r for r in rows}
+    assert by_order["O1"]["gmv"] == 0  # Hủy sau XK
+    assert by_order["O2"]["gmv"] == 0  # Hủy chưa XK
+    assert by_order["O5"]["gmv"] == 200000  # Hoàn thành: originalPrice(200000) x soLuongThuc(1)
+
+
+def test_rows_gmv_nmv_loi_nhuan_gop_columns_reconcile_with_summary(
+    parquet_path_with_discounts, master_parquet_path,
+):
+    summary = run_summary_query(parquet_path_with_discounts, master_source=[master_parquet_path])
+    rows = run_export_query(parquet_path_with_discounts, master_source=[master_parquet_path])
+    assert sum(r["gmv"] for r in rows) == summary["kpis"]["gmv"]
+    assert sum(r["doanhThuThuan"] for r in rows) == summary["kpis"]["doanhThuThuan"]
+    assert sum(r["nmv"] for r in rows) == summary["kpis"]["nmv"]
+    assert sum(r["loiNhuanGop"] for r in rows) == summary["kpis"]["loiNhuanGop"]
+
+
+def test_grouped_rows_gmv_nmv_loi_nhuan_gop_reconcile_with_summary(
+    parquet_path_with_discounts, master_parquet_path,
+):
+    result = run_grouped_rows_query(
+        parquet_path_with_discounts, group_by="sku", master_source=[master_parquet_path], page_size=10,
+    )
+    summary = run_summary_query(parquet_path_with_discounts, master_source=[master_parquet_path])
+    assert sum(r["gmv"] for r in result["rows"]) == summary["kpis"]["gmv"]
+    assert sum(r["nmv"] for r in result["rows"]) == summary["kpis"]["nmv"]
+    assert sum(r["loiNhuanGop"] for r in result["rows"]) == summary["kpis"]["loiNhuanGop"]

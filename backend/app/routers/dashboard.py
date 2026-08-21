@@ -32,7 +32,8 @@ DETAIL_COLUMN_LABELS = {
     "status": "Status", "trangThai": "Trạng thái", "discount": "Giảm giá", "voucher": "Voucher",
     "platformFee": "Phí sàn", "piship": "Phí Piship", "phiAff": "Phí AFF",
     "phanLoaiKho": "Phân loại kho", "phanLoaiMuc": "Phân loại mục", "phanLoaiSp": "Phân loại sản phẩm",
-    "giaVon": "Giá vốn",
+    "giaVon": "Giá vốn", "gmv": "GMV", "doanhThuThuan": "Doanh thu thuần", "nmv": "NMV",
+    "loiNhuanGop": "Lợi nhuận gộp",
 }
 GROUP_BY_LABELS = {
     "sku": "SKU", "product": "Sản phẩm", "category": "Danh mục", "customer": "Khách hàng",
@@ -43,6 +44,7 @@ GROUP_AGG_LABELS = {
     "rowCount": "Số dòng", "quantity": "Số lượng", "returnedQty": "SL hoàn trả",
     "soLuongThuc": "SL thực", "doanhSo": "Doanh số", "discount": "Giảm giá", "voucher": "Voucher",
     "platformFee": "Phí sàn", "piship": "Phí Piship", "phiAff": "Phí AFF", "giaVon": "Giá vốn",
+    "gmv": "GMV", "doanhThuThuan": "Doanh thu thuần", "nmv": "NMV", "loiNhuanGop": "Lợi nhuận gộp",
 }
 
 router = APIRouter(prefix="/api/reports", tags=["dashboard"])
@@ -137,6 +139,19 @@ async def dashboard_summary(
     )
 
 
+def _zip_path_filters(path_by: list[str], path_value: list[str]) -> list[tuple[str, str]]:
+    """Zips the repeated ?pathBy=&pathValue= query params into (key, value)
+    pairs for the nested/hierarchical "Group theo" drill-down — each pair
+    narrows to one ancestor level (e.g. pathBy=category&pathValue=Áo).
+    """
+    if len(path_by) != len(path_value):
+        raise HTTPException(status_code=400, detail="pathBy và pathValue phải có cùng số lượng.")
+    for key in path_by:
+        if key not in GROUP_BY_COLUMNS:
+            raise HTTPException(status_code=400, detail=f"pathBy không hợp lệ: {key}")
+    return list(zip(path_by, path_value))
+
+
 @dashboard_router.get("/rows", response_model=RowsOut)
 async def dashboard_rows(
     from_: Optional[str] = Query(None, alias="from"),
@@ -152,10 +167,11 @@ async def dashboard_rows(
     sort_dir: str = "asc",
     page: int = 1,
     pageSize: int = 15,
-    groupBy: Optional[str] = None,
-    groupValue: Optional[str] = None,
+    pathBy: list[str] = Query([]),
+    pathValue: list[str] = Query([]),
     user: dict = Depends(get_current_user),
 ):
+    path_filters = _zip_path_filters(pathBy, pathValue)
     paths = await _all_ready_parquet_paths()
     cashflow_paths = await _all_ready_cashflow_parquet_paths()
     combo_paths = await _all_ready_combo_parquet_paths()
@@ -165,7 +181,7 @@ async def dashboard_rows(
         search=search, sort=sort, sort_dir=sort_dir, page=page, page_size=pageSize,
         cashflow_source=cashflow_paths, combo_source=combo_paths, master_source=master_paths,
         warehouse_type=warehouseType, item_group=itemGroup, product_type=productType, sku=sku,
-        group_by=groupBy, group_value=groupValue,
+        path_filters=path_filters,
     )
 
 
@@ -185,10 +201,13 @@ async def dashboard_rows_grouped(
     sortDir: str = "desc",
     page: int = 1,
     pageSize: int = 15,
+    pathBy: list[str] = Query([]),
+    pathValue: list[str] = Query([]),
     user: dict = Depends(get_current_user),
 ):
     if groupBy not in GROUP_BY_COLUMNS:
         raise HTTPException(status_code=400, detail=f"groupBy không hợp lệ: {groupBy}")
+    path_filters = _zip_path_filters(pathBy, pathValue)
     paths = await _all_ready_parquet_paths()
     cashflow_paths = await _all_ready_cashflow_parquet_paths()
     combo_paths = await _all_ready_combo_parquet_paths()
@@ -198,6 +217,7 @@ async def dashboard_rows_grouped(
         search=search, group_by=groupBy, sort=sort, sort_dir=sortDir, page=page, page_size=pageSize,
         cashflow_source=cashflow_paths, combo_source=combo_paths, master_source=master_paths,
         warehouse_type=warehouseType, item_group=itemGroup, product_type=productType, sku=sku,
+        path_filters=path_filters,
     )
 
 

@@ -21,12 +21,12 @@ DETAIL_COLUMNS = [
     "quantity", "returnedQty", "soLuongThuc", "price", "originalPrice",
     "revenue", "doanhSo", "status", "trangThai", "discount", "voucher",
     "platformFee", "piship", "phiAff", "phanLoaiKho", "phanLoaiMuc",
-    "phanLoaiSp", "giaVon",
+    "phanLoaiSp", "giaVon", "gmv", "doanhThuThuan", "nmv", "loiNhuanGop",
 ]
 
 ALLOWED_SORT_COLUMNS = {
     "date", "orderId", "product", "category", "customer",
-    "quantity", "doanhSo", "trangThai",
+    "quantity", "doanhSo", "trangThai", "gmv", "doanhThuThuan", "nmv", "loiNhuanGop",
 }
 
 # Allow-list mapping the Detail-table's "Group theo" dropdown keys to their
@@ -48,6 +48,7 @@ GROUP_SORT_COLUMNS = {
     "returnedQty": "returned_qty", "soLuongThuc": "so_luong_thuc", "doanhSo": "doanh_so",
     "discount": "discount", "voucher": "voucher", "platformFee": "platform_fee",
     "piship": "piship", "phiAff": "phi_aff", "giaVon": "gia_von",
+    "gmv": "gmv", "doanhThuThuan": "doanh_thu_thuan", "nmv": "nmv", "loiNhuanGop": "loi_nhuan_gop",
 }
 
 GMV_STATUSES_SQL = "('Hoàn thành', 'Đang giao', 'Hoàn 1 phần')"
@@ -275,6 +276,38 @@ def _build_orders_working(
     item_group_expr = f"CASE WHEN {is_combo_child} THEN 'combo' ELSE {muc_expr} END"
     product_type_expr = f"CASE WHEN {is_combo_child} THEN 'combo' ELSE {phan_loai_sp_expr} END"
 
+    # Per-row GMV/Doanh thu thuần/NMV/Lợi nhuận gộp — mirror run_summary_query's
+    # KPI formulas exactly (see totals_sql below) so that SUM()-ing these
+    # columns over any filtered/grouped subset always reconciles with the
+    # KPI cards for that same subset. Only GMV-status rows count towards
+    # GMV/discount/voucher/Giá vốn here (same CASE-WHEN scoping as the KPI
+    # totals); Phí sàn/Piship/Phí AFF are NOT status-scoped (piship already
+    # excludes "Hủy chưa XK" via its own CASE above), matching the KPIs.
+    piship_row_expr = (
+        f"CASE WHEN ({slot_expr} IS NULL OR {slot_expr} = 1) AND o.\"trangThai\" != 'Hủy chưa XK' "
+        f"THEN {piship_col} ELSE 0 END"
+    )
+    phi_aff_row_expr = f"(({aff_expr}) * {ratio_expr})"
+    gmv_row_expr = (
+        f'CASE WHEN o."trangThai" IN {GMV_STATUSES_SQL} '
+        f'THEN o."originalPrice" * {ratio_expr} * o."soLuongThuc" ELSE 0 END'
+    )
+    scoped_discount_row_expr = (
+        f'CASE WHEN o."trangThai" IN {GMV_STATUSES_SQL} THEN {discount_col} * {ratio_expr} ELSE 0 END'
+    )
+    scoped_voucher_row_expr = (
+        f'CASE WHEN o."trangThai" IN {GMV_STATUSES_SQL} THEN {voucher_col} * {ratio_expr} ELSE 0 END'
+    )
+    doanh_thu_thuan_row_expr = f"({gmv_row_expr} - {scoped_discount_row_expr} - {scoped_voucher_row_expr})"
+    nmv_row_expr = (
+        f"({doanh_thu_thuan_row_expr} - {platform_fee_col} * {ratio_expr} "
+        f"- {piship_row_expr} - {phi_aff_row_expr})"
+    )
+    scoped_gia_von_row_expr = (
+        f'CASE WHEN o."trangThai" IN {GMV_STATUSES_SQL} THEN o."soLuongThuc" * {gia_von_expr} ELSE 0 END'
+    )
+    loi_nhuan_gop_row_expr = f"({nmv_row_expr} - {scoped_gia_von_row_expr})"
+
     create_sql = f"""
         CREATE TEMP TABLE orders_working AS
         SELECT
@@ -302,7 +335,11 @@ def _build_orders_working(
           {warehouse_expr} AS "phanLoaiKho",
           {item_group_expr} AS "phanLoaiMuc",
           {product_type_expr} AS "phanLoaiSp",
-          o."soLuongThuc" * {gia_von_expr} AS "giaVon"
+          o."soLuongThuc" * {gia_von_expr} AS "giaVon",
+          {gmv_row_expr} AS "gmv",
+          {doanh_thu_thuan_row_expr} AS "doanhThuThuan",
+          {nmv_row_expr} AS "nmv",
+          {loi_nhuan_gop_row_expr} AS "loiNhuanGop"
         FROM read_parquet(?, union_by_name=true) o
         {combo_join_sql}
         {cashflow_join_sql}
@@ -418,13 +455,27 @@ def run_summary_query(
         con.close()
 
 
+def _apply_path_filters(where_sql: str, params: list, path_filters) -> str:
+    """Appends one equality filter per (group_by_key, value) pair in
+    path_filters — the ancestor chain for a node in the Detail-table's
+    nested/hierarchical "Group theo" view (see run_grouped_rows_query and
+    run_rows_query). Each key is checked against the same GROUP_BY_COLUMNS
+    allow-list used to build the GROUP BY itself before being interpolated.
+    """
+    for group_by_key, value in (path_filters or []):
+        if group_by_key in GROUP_BY_COLUMNS and value is not None:
+            where_sql += f' AND "{GROUP_BY_COLUMNS[group_by_key]}" = ?'
+            params.append(value)
+    return where_sql
+
+
 def run_rows_query(
     parquet_source,
     from_date=None, to_date=None, category=None, status=None,
     search=None, sort="date", sort_dir="asc", page=1, page_size=15,
     cashflow_source=None, combo_source=None, master_source=None,
     warehouse_type=None, item_group=None, product_type=None, sku=None,
-    group_by=None, group_value=None,
+    path_filters=None,
 ) -> dict:
     page = max(1, page)
     if _is_empty_source(parquet_source):
@@ -438,13 +489,10 @@ def run_rows_query(
         available = _available_columns(con, parquet_source)
         _build_orders_working(con, parquet_source, available, combo_source, cashflow_source, master_source)
 
-        # Drill-down request from a group row in the Detail-table's grouped
-        # view (see run_grouped_rows_query) — narrows to exactly that
-        # group's underlying rows. group_by is checked against the same
-        # allow-list used to build the GROUP BY itself.
-        if group_by and group_by in GROUP_BY_COLUMNS and group_value is not None:
-            where_sql += f' AND "{GROUP_BY_COLUMNS[group_by]}" = ?'
-            params.append(group_value)
+        # Drill-down request from a (possibly nested) group node in the
+        # Detail-table's grouped view — narrows to exactly that node's
+        # underlying raw rows, one equality filter per ancestor level.
+        where_sql = _apply_path_filters(where_sql, params, path_filters)
 
         if search:
             where_sql += (
@@ -498,10 +546,27 @@ def _grouped_agg_sql(where_sql: str, group_col: str) -> str:
           COALESCE(SUM("platformFee"), 0) AS platform_fee,
           COALESCE(SUM("piship"), 0) AS piship,
           COALESCE(SUM("phiAff"), 0) AS phi_aff,
-          COALESCE(SUM("giaVon"), 0) AS gia_von
+          COALESCE(SUM("giaVon"), 0) AS gia_von,
+          COALESCE(SUM("gmv"), 0) AS gmv,
+          COALESCE(SUM("doanhThuThuan"), 0) AS doanh_thu_thuan,
+          COALESCE(SUM("nmv"), 0) AS nmv,
+          COALESCE(SUM("loiNhuanGop"), 0) AS loi_nhuan_gop
         FROM orders_working WHERE {where_sql}
         GROUP BY "{group_col}"
     """
+
+
+def _grouped_row_dict(r: dict) -> dict:
+    return {
+        "groupValue": r["group_value"], "rowCount": r["row_count"],
+        "quantity": r["quantity"], "returnedQty": r["returned_qty"],
+        "soLuongThuc": r["so_luong_thuc"], "doanhSo": r["doanh_so"],
+        "discount": r["discount"], "voucher": r["voucher"],
+        "platformFee": r["platform_fee"], "piship": r["piship"],
+        "phiAff": r["phi_aff"], "giaVon": r["gia_von"],
+        "gmv": r["gmv"], "doanhThuThuan": r["doanh_thu_thuan"],
+        "nmv": r["nmv"], "loiNhuanGop": r["loi_nhuan_gop"],
+    }
 
 
 def run_grouped_rows_query(
@@ -510,12 +575,18 @@ def run_grouped_rows_query(
     search=None, group_by="sku", sort="doanhSo", sort_dir="desc", page=1, page_size=15,
     cashflow_source=None, combo_source=None, master_source=None,
     warehouse_type=None, item_group=None, product_type=None, sku=None,
+    path_filters=None,
 ) -> dict:
     """Server-side group-by-column aggregation over orders_working — the
     "Group theo" mode of the Detail-table sub-tab. Never loads the raw row
     set into Python; DuckDB does the GROUP BY over however many hundreds of
     thousands of rows match the filters, and only the (much smaller) group
     result page comes back.
+
+    path_filters (list of (group_by_key, value) pairs) narrows to a specific
+    ancestor combination for nested/hierarchical grouping — e.g. grouping by
+    "warehouseType" within the "Áo" category node of a "category" ->
+    "warehouseType" hierarchy passes path_filters=[("category", "Áo")].
     """
     page = max(1, page)
     if _is_empty_source(parquet_source) or group_by not in GROUP_BY_COLUMNS:
@@ -530,6 +601,7 @@ def run_grouped_rows_query(
         )
         available = _available_columns(con, parquet_source)
         _build_orders_working(con, parquet_source, available, combo_source, cashflow_source, master_source)
+        where_sql = _apply_path_filters(where_sql, params, path_filters)
 
         if search:
             where_sql += (
@@ -556,17 +628,7 @@ def run_grouped_rows_query(
         cursor = con.execute(rows_sql, [*params, page_size, offset])
         col_names = [d[0] for d in cursor.description]
         raw_rows = [dict(zip(col_names, r)) for r in cursor.fetchall()]
-        rows = [
-            {
-                "groupValue": r["group_value"], "rowCount": r["row_count"],
-                "quantity": r["quantity"], "returnedQty": r["returned_qty"],
-                "soLuongThuc": r["so_luong_thuc"], "doanhSo": r["doanh_so"],
-                "discount": r["discount"], "voucher": r["voucher"],
-                "platformFee": r["platform_fee"], "piship": r["piship"],
-                "phiAff": r["phi_aff"], "giaVon": r["gia_von"],
-            }
-            for r in raw_rows
-        ]
+        rows = [_grouped_row_dict(r) for r in raw_rows]
 
         return {"rows": rows, "total": total, "page": page, "pageSize": page_size}
     finally:
@@ -613,17 +675,7 @@ def run_export_query(
             cursor = con.execute(sql, params)
             col_names = [d[0] for d in cursor.description]
             raw_rows = [dict(zip(col_names, r)) for r in cursor.fetchall()]
-            return [
-                {
-                    "groupValue": r["group_value"], "rowCount": r["row_count"],
-                    "quantity": r["quantity"], "returnedQty": r["returned_qty"],
-                    "soLuongThuc": r["so_luong_thuc"], "doanhSo": r["doanh_so"],
-                    "discount": r["discount"], "voucher": r["voucher"],
-                    "platformFee": r["platform_fee"], "piship": r["piship"],
-                    "phiAff": r["phi_aff"], "giaVon": r["gia_von"],
-                }
-                for r in raw_rows
-            ]
+            return [_grouped_row_dict(r) for r in raw_rows]
 
         sort_col = sort if sort in ALLOWED_SORT_COLUMNS else "date"
         sort_dir_sql = "DESC" if str(sort_dir).lower() == "desc" else "ASC"

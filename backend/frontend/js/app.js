@@ -770,13 +770,22 @@
     readyCount: 0,
     subtab: "overview",
     detailSearch: "",
-    detailGroupBy: "",
+    detailGroupByLevels: [], // ordered list of GROUP_BY_COLUMNS keys — [] means "Không group"; index = hierarchy level
     detailSort: "date",
     detailSortDir: "asc",
     detailPage: 1,
     detailPageSize: 15,
     visibleCols: null, // Set, lazily loaded from localStorage — TABLE_COLS isn't defined yet at this point in the file
-    expandedGroups: new Map(), // groupValue -> { rows, total, page, pageSize, loading }
+    // Nested "Group theo" tree state — a node's path is the ordered chain of
+    // {column, value} filters from the root down to (and including) it, e.g.
+    // [{column:"category",value:"Áo"},{column:"warehouseType",value:"Kho HN"}].
+    // expandedGroups is keyed by pathKey() and holds what's currently fetched
+    // for that expanded node (either the next nesting level's grouped rows,
+    // or — once every selected level is exhausted — raw drill-down rows).
+    // pathFiltersByKey recovers the actual path array from a key (DOM
+    // data-attributes only carry the key, not the array).
+    expandedGroups: new Map(), // pathKey -> { rows, total, page, pageSize, loading, isGrouped }
+    pathFiltersByKey: new Map(), // pathKey -> [{column, value}, ...]
     lastDetailResult: null,
     lastDetailGrouped: false,
     // Multi-select filters — each holds the set of currently-checked values;
@@ -917,6 +926,52 @@
     });
   }
 
+  // Clears every expanded "Group theo" node — called whenever the top-level
+  // query changes (filters/search/sort/page/group columns), since a stale
+  // node's cached rows would no longer necessarily belong under the new
+  // top-level result set.
+  function clearGroupState() {
+    dash.expandedGroups.clear();
+    dash.pathFiltersByKey.clear();
+  }
+
+  function groupByLabel(key) { return GROUP_BY_LABELS[key] || key; }
+
+  function updateGroupBySummary() {
+    el("detailGroupBySummary").textContent = dash.detailGroupByLevels.length
+      ? dash.detailGroupByLevels.map(groupByLabel).join(" → ")
+      : "Không group";
+    el("detailGroupByExportNote").hidden = dash.detailGroupByLevels.length <= 1;
+  }
+
+  // Ordered multi-select — checking an option appends it to the end of
+  // detailGroupByLevels (defining the next nesting level down); unchecking
+  // removes it from wherever it is. No drag-and-drop reordering — re-check
+  // in the order you want the levels if you need to change the order.
+  function renderGroupByPicker() {
+    const list = el("detailGroupByList");
+    list.innerHTML = Object.keys(GROUP_BY_LABELS).map(key =>
+      `<label><input type="checkbox" data-groupby="${key}" ${dash.detailGroupByLevels.includes(key) ? "checked" : ""}/> ${escapeHtml(groupByLabel(key))}</label>`
+    ).join("");
+    list.querySelectorAll("input[data-groupby]").forEach(cb => {
+      cb.onchange = () => {
+        const key = cb.dataset.groupby;
+        if (cb.checked) {
+          if (!dash.detailGroupByLevels.includes(key)) dash.detailGroupByLevels.push(key);
+        } else {
+          dash.detailGroupByLevels = dash.detailGroupByLevels.filter(k => k !== key);
+        }
+        updateGroupBySummary();
+        dash.detailPage = 1;
+        dash.detailSort = dash.detailGroupByLevels.length ? "doanhSo" : "date";
+        dash.detailSortDir = dash.detailGroupByLevels.length ? "desc" : "asc";
+        clearGroupState();
+        fetchAndRenderDetailTable();
+      };
+    });
+    updateGroupBySummary();
+  }
+
   // Filters only apply when the user clicks "Tìm kiếm" (not on every field
   // change) — this also avoids a race where an earlier, slower request
   // (e.g. the initial unfiltered load) resolves after a later filtered one
@@ -938,30 +993,23 @@
     el("tableSearch").oninput = e => {
       dash.detailSearch = e.target.value;
       dash.detailPage = 1;
-      dash.expandedGroups.clear();
-      fetchAndRenderDetailTable();
-    };
-    el("detailGroupBy").onchange = e => {
-      dash.detailGroupBy = e.target.value;
-      dash.detailPage = 1;
-      dash.detailSort = dash.detailGroupBy ? "doanhSo" : "date";
-      dash.detailSortDir = dash.detailGroupBy ? "desc" : "asc";
-      dash.expandedGroups.clear();
+      clearGroupState();
       fetchAndRenderDetailTable();
     };
     el("detailPrev").onclick = () => {
-      if (dash.detailPage > 1) { dash.detailPage--; dash.expandedGroups.clear(); fetchAndRenderDetailTable(); }
+      if (dash.detailPage > 1) { dash.detailPage--; clearGroupState(); fetchAndRenderDetailTable(); }
     };
-    el("detailNext").onclick = () => { dash.detailPage++; dash.expandedGroups.clear(); fetchAndRenderDetailTable(); };
+    el("detailNext").onclick = () => { dash.detailPage++; clearGroupState(); fetchAndRenderDetailTable(); };
     el("btnExportExcel").onclick = () => exportExcel();
     wireSubtabs();
     ensureVisibleCols();
     renderColumnPicker();
+    renderGroupByPicker();
   }
 
   function applyFiltersAndRender() {
     dash.detailPage = 1;
-    dash.expandedGroups.clear();
+    clearGroupState();
     fetchAndRenderSummary();
     fetchAndRenderDetailTable();
   }
@@ -983,9 +1031,9 @@
     const seq = ++dash.detailSeq;
     ensureVisibleCols();
     try {
-      if (dash.detailGroupBy) {
+      if (dash.detailGroupByLevels.length) {
         const params = currentFilterParams({
-          search: dash.detailSearch, groupBy: dash.detailGroupBy,
+          search: dash.detailSearch, groupBy: dash.detailGroupByLevels[0],
           sort: dash.detailSort, sortDir: dash.detailSortDir,
           page: dash.detailPage, pageSize: dash.detailPageSize,
         });
@@ -1057,13 +1105,17 @@
     { key: "doanhSo", label: "Doanh số", fmt: v => fmtNumber(v) },
     { key: "discount", label: "Giảm giá", fmt: v => fmtNumber(v) },
     { key: "voucher", label: "Voucher", fmt: v => fmtNumber(v) },
+    { key: "gmv", label: "GMV", fmt: v => fmtNumber(v) },
+    { key: "doanhThuThuan", label: "Doanh thu thuần", fmt: v => fmtNumber(v) },
     { key: "platformFee", label: "Phí sàn", fmt: v => fmtNumber(v) },
     { key: "piship", label: "Phí Piship", fmt: v => fmtNumber(v) },
     { key: "phiAff", label: "Phí AFF", fmt: v => fmtNumber(v) },
+    { key: "nmv", label: "NMV", fmt: v => fmtNumber(v) },
     { key: "phanLoaiKho", label: "Phân loại kho" },
     { key: "phanLoaiMuc", label: "Phân loại mục" },
     { key: "phanLoaiSp", label: "Phân loại sản phẩm" },
     { key: "giaVon", label: "Giá vốn", fmt: v => fmtNumber(v) },
+    { key: "loiNhuanGop", label: "Lợi nhuận gộp", fmt: v => fmtNumber(v) },
     { key: "trangThai", label: "Trạng thái" },
   ];
 
@@ -1072,6 +1124,7 @@
   // for anything else, so the UI must not offer a sort arrow it can't honor.
   const SORTABLE_FLAT_COLUMNS = new Set([
     "date", "orderId", "product", "category", "customer", "quantity", "doanhSo", "trangThai",
+    "gmv", "doanhThuThuan", "nmv", "loiNhuanGop",
   ]);
 
   // Mirrors app/routers/dashboard.py's GROUP_BY_LABELS/GROUP_AGG_LABELS —
@@ -1091,10 +1144,14 @@
     { key: "doanhSo", label: "Doanh số", fmt: v => fmtNumber(v) },
     { key: "discount", label: "Giảm giá", fmt: v => fmtNumber(v) },
     { key: "voucher", label: "Voucher", fmt: v => fmtNumber(v) },
+    { key: "gmv", label: "GMV", fmt: v => fmtNumber(v) },
+    { key: "doanhThuThuan", label: "Doanh thu thuần", fmt: v => fmtNumber(v) },
     { key: "platformFee", label: "Phí sàn", fmt: v => fmtNumber(v) },
     { key: "piship", label: "Phí Piship", fmt: v => fmtNumber(v) },
     { key: "phiAff", label: "Phí AFF", fmt: v => fmtNumber(v) },
+    { key: "nmv", label: "NMV", fmt: v => fmtNumber(v) },
     { key: "giaVon", label: "Giá vốn", fmt: v => fmtNumber(v) },
+    { key: "loiNhuanGop", label: "Lợi nhuận gộp", fmt: v => fmtNumber(v) },
   ];
 
   function sortArrow(sortKey, currentSort, currentDir) {
@@ -1102,6 +1159,9 @@
     return `<span class="sort-arrow">${currentDir === "desc" ? "▼" : "▲"}</span>`;
   }
 
+  // Only wires the TOP-level (level 0) header row — nested levels (level 1+,
+  // embedded inside an expanded node) are intentionally static/unsortable to
+  // keep the recursive tree UI bounded; they're always doanhSo-desc.
   function wireSortableHeaders(thead) {
     thead.querySelectorAll("th.sortable").forEach(th => {
       th.onclick = () => {
@@ -1113,10 +1173,14 @@
           dash.detailSortDir = "asc";
         }
         dash.detailPage = 1;
-        dash.expandedGroups.clear();
+        clearGroupState();
         fetchAndRenderDetailTable();
       };
     });
+  }
+
+  function pathKey(pathFilters) {
+    return pathFilters.map(f => `${f.column}=${f.value}`).join("|");
   }
 
   function rerenderDetailTableOnly() {
@@ -1155,7 +1219,8 @@
     dash.lastDetailGrouped = true;
     const thead = document.querySelector("#detailTable thead");
     const tbody = document.querySelector("#detailTable tbody");
-    const groupLabel = GROUP_BY_LABELS[dash.detailGroupBy] || "Nhóm";
+    const level = 0;
+    const groupLabel = groupByLabel(dash.detailGroupByLevels[level]);
     // rowCount is always shown (it's structural, not a TABLE_COLS entry) —
     // every other aggregate column is gated by the same column picker Set
     // used by the flat view, since their keys coincide.
@@ -1174,7 +1239,10 @@
     if (!result.rows.length) {
       tbody.innerHTML = `<tr><td colspan="${cols.length + 1}" class="muted" style="padding:20px;">Không có dữ liệu</td></tr>`;
     } else {
-      tbody.innerHTML = result.rows.map(r => renderGroupRowHtml(r, cols)).join("");
+      tbody.innerHTML = result.rows.map(r => renderGroupRowHtml(r, cols, level, [])).join("");
+      // A single pass over the WHOLE (possibly multi-level-deep) subtree —
+      // querySelectorAll reaches nested <table>s embedded inside expanded
+      // <td>s too, so every level's rows/buttons get wired in one call.
       wireGroupRowInteractions(tbody);
     }
 
@@ -1182,29 +1250,63 @@
     el("detailPageInfo").textContent = `Trang ${result.page} / ${maxPage} (${result.total.toLocaleString("vi-VN")} nhóm)`;
   }
 
-  function renderGroupRowHtml(r, cols) {
-    const key = String(r.groupValue ?? "");
+  // level = index into dash.detailGroupByLevels for the column THIS row is
+  // grouped on. pathFilters = the ancestor chain (NOT including this row's
+  // own filter). Recorded into pathFiltersByKey so toggleGroupExpand can
+  // recover the full path later from just the DOM's data-path-key.
+  function renderGroupRowHtml(r, cols, level, pathFilters) {
+    const groupByKey = dash.detailGroupByLevels[level];
+    const thisFilter = { column: groupByKey, value: String(r.groupValue ?? "") };
+    const fullPath = [...pathFilters, thisFilter];
+    const key = pathKey(fullPath);
+    dash.pathFiltersByKey.set(key, fullPath);
+
     const expanded = dash.expandedGroups.has(key);
     const chevron = expanded ? "▼" : "▶";
     const label = r.groupValue == null || r.groupValue === "" ? "(Trống)" : r.groupValue;
-    let html = `<tr class="group-row" data-group-value="${escapeHtml(key)}">` +
+    let html = `<tr class="group-row" data-path-key="${escapeHtml(key)}">` +
       `<td><span class="group-chevron">${chevron}</span>${escapeHtml(label)}</td>` +
       cols.map(c => `<td>${c.fmt(r[c.key])}</td>`).join("") +
       `</tr>`;
-    if (expanded) html += renderGroupDetailRowsHtml(key, cols.length + 1);
+    if (expanded) html += renderExpandedNodeHtml(key, level, cols.length + 1);
     return html;
   }
 
-  // The drill-down uses its own nested <table> inside one wide <td>, rather
-  // than trying to align full detail columns under the grouped-aggregate
-  // header row — the two column sets don't match, so sharing one <table>'s
-  // column grid would misrender.
-  function renderGroupDetailRowsHtml(groupValue, colspan) {
-    const state = dash.expandedGroups.get(groupValue);
+  // Renders whatever's cached for an expanded node: either the NEXT nesting
+  // level's grouped rows (a nested <table>, itself built from
+  // renderGroupRowHtml called recursively at level+1 — so a 3rd/4th level
+  // expands exactly the same way), or — once every selected group-by column
+  // has been consumed — the final flat drill-down rows. Either way this is
+  // a nested <table> inside one wide <td>, never sharing a column grid with
+  // its parent (the column sets don't match).
+  function renderExpandedNodeHtml(key, level, colspan) {
+    const state = dash.expandedGroups.get(key);
     if (!state) return "";
     if (state.loading) {
       return `<tr class="group-detail-row"><td colspan="${colspan}" class="muted" style="padding:12px;">Đang tải...</td></tr>`;
     }
+    const pathFilters = dash.pathFiltersByKey.get(key) || [];
+    const remaining = state.total - state.rows.length;
+    const moreHtml = remaining > 0
+      ? `<button class="btn btn-ghost btn-sm group-load-more" data-path-key="${escapeHtml(key)}">Tải thêm (còn ${remaining.toLocaleString("vi-VN")}${state.isGrouped ? " nhóm" : ""})</button>`
+      : "";
+
+    if (state.isGrouped) {
+      const nextLevel = level + 1;
+      const nextGroupLabel = groupByLabel(dash.detailGroupByLevels[nextLevel]);
+      const cols = GROUP_AGG_COLS.filter(c => c.key === "rowCount" || dash.visibleCols.has(c.key));
+      const theadHtml = `<tr><th>${escapeHtml(nextGroupLabel)}</th>${cols.map(c => `<th>${escapeHtml(c.label)}</th>`).join("")}</tr>`;
+      const bodyHtml = state.rows.length
+        ? state.rows.map(r => renderGroupRowHtml(r, cols, nextLevel, pathFilters)).join("")
+        : `<tr><td colspan="${cols.length + 1}" class="muted">Không có dữ liệu</td></tr>`;
+      return `<tr class="group-detail-row"><td colspan="${colspan}">
+          <div class="table-scroll" style="max-height:320px;">
+            <table><thead>${theadHtml}</thead><tbody>${bodyHtml}</tbody></table>
+          </div>
+          ${moreHtml}
+        </td></tr>`;
+    }
+
     const flatCols = TABLE_COLS.filter(c => dash.visibleCols.has(c.key));
     const rowsHtml = state.rows.map(row =>
       "<tr>" + flatCols.map(c => {
@@ -1212,10 +1314,6 @@
         return `<td>${v == null || v === "" ? "" : (c.fmt ? c.fmt(v) : escapeHtml(v))}</td>`;
       }).join("") + "</tr>"
     ).join("");
-    const remaining = state.total - state.rows.length;
-    const moreHtml = remaining > 0
-      ? `<button class="btn btn-ghost btn-sm group-load-more" data-group-value="${escapeHtml(groupValue)}">Tải thêm (còn ${remaining.toLocaleString("vi-VN")})</button>`
-      : "";
     return `<tr class="group-detail-row"><td colspan="${colspan}">
         <div class="table-scroll" style="max-height:260px;">
           <table><thead><tr>${flatCols.map(c => `<th>${escapeHtml(c.label)}</th>`).join("")}</tr></thead>
@@ -1225,48 +1323,65 @@
       </td></tr>`;
   }
 
-  function wireGroupRowInteractions(tbody) {
-    tbody.querySelectorAll("tr.group-row").forEach(tr => {
-      tr.onclick = () => toggleGroupExpand(tr.dataset.groupValue);
+  function wireGroupRowInteractions(container) {
+    container.querySelectorAll("tr.group-row").forEach(tr => {
+      tr.onclick = () => toggleGroupExpand(tr.dataset.pathKey);
     });
-    tbody.querySelectorAll(".group-load-more").forEach(btn => {
-      btn.onclick = e => { e.stopPropagation(); loadMoreGroupDetail(btn.dataset.groupValue); };
+    container.querySelectorAll(".group-load-more").forEach(btn => {
+      btn.onclick = e => { e.stopPropagation(); loadMoreGroupNode(btn.dataset.pathKey); };
     });
   }
 
-  async function toggleGroupExpand(groupValue) {
-    if (dash.expandedGroups.has(groupValue)) {
-      dash.expandedGroups.delete(groupValue);
+  async function toggleGroupExpand(key) {
+    if (dash.expandedGroups.has(key)) {
+      dash.expandedGroups.delete(key);
       rerenderDetailTableOnly();
       return;
     }
-    dash.expandedGroups.set(groupValue, { rows: [], total: 0, page: 1, pageSize: 50, loading: true });
+    const pathFilters = dash.pathFiltersByKey.get(key) || [];
+    const level = pathFilters.length - 1; // the level of the row being expanded
+    const isGrouped = level + 1 < dash.detailGroupByLevels.length;
+    dash.expandedGroups.set(key, { rows: [], total: 0, page: 1, pageSize: 50, loading: true, isGrouped });
     rerenderDetailTableOnly();
-    await fetchGroupDetailPage(groupValue, 1);
+    await fetchGroupNodePage(key, pathFilters, level, isGrouped, 1);
   }
 
-  async function fetchGroupDetailPage(groupValue, page) {
-    const params = currentFilterParams({
-      search: dash.detailSearch, groupBy: dash.detailGroupBy, groupValue,
-      sort: "date", sort_dir: "asc", page, pageSize: 50,
-    });
+  async function fetchGroupNodePage(key, pathFilters, level, isGrouped, page) {
     try {
-      const result = await API.apiJson(`/api/dashboard/rows?${params.toString()}`);
-      const prev = dash.expandedGroups.get(groupValue);
+      let result;
+      if (isGrouped) {
+        const nextGroupByKey = dash.detailGroupByLevels[level + 1];
+        const params = currentFilterParams({
+          search: dash.detailSearch, groupBy: nextGroupByKey,
+          sort: "doanhSo", sortDir: "desc", page, pageSize: 50,
+        });
+        pathFilters.forEach(f => { params.append("pathBy", f.column); params.append("pathValue", f.value); });
+        result = await API.apiJson(`/api/dashboard/rows/grouped?${params.toString()}`);
+      } else {
+        const params = currentFilterParams({
+          search: dash.detailSearch, sort: "date", sort_dir: "asc", page, pageSize: 50,
+        });
+        pathFilters.forEach(f => { params.append("pathBy", f.column); params.append("pathValue", f.value); });
+        result = await API.apiJson(`/api/dashboard/rows?${params.toString()}`);
+      }
+      const prev = dash.expandedGroups.get(key);
       if (!prev) return; // collapsed while the request was in flight
       const rows = page === 1 ? result.rows : [...prev.rows, ...result.rows];
-      dash.expandedGroups.set(groupValue, { rows, total: result.total, page, pageSize: 50, loading: false });
+      dash.expandedGroups.set(key, { rows, total: result.total, page, pageSize: 50, loading: false, isGrouped });
       rerenderDetailTableOnly();
     } catch (err) {
-      console.error("Group drill-down fetch failed:", err);
-      dash.expandedGroups.delete(groupValue);
+      console.error("Group node fetch failed:", err);
+      dash.expandedGroups.delete(key);
       rerenderDetailTableOnly();
     }
   }
 
-  function loadMoreGroupDetail(groupValue) {
-    const state = dash.expandedGroups.get(groupValue);
-    if (state) fetchGroupDetailPage(groupValue, state.page + 1);
+  function loadMoreGroupNode(key) {
+    const state = dash.expandedGroups.get(key);
+    if (!state) return;
+    const pathFilters = dash.pathFiltersByKey.get(key) || [];
+    const level = pathFilters.length - 1;
+    fetchGroupNodePage(key, pathFilters, level, state.isGrouped, state.page + 1);
   }
 
   async function exportExcel() {
@@ -1276,14 +1391,18 @@
     btn.textContent = "Đang xuất...";
     try {
       ensureVisibleCols();
-      const exportCols = dash.detailGroupBy
+      // Export always uses the TOP-level group (index 0) only — a specific
+      // nested branch isn't exportable, matching detailGroupByExportNote's
+      // caption shown whenever more than 1 level is selected.
+      const topGroupBy = dash.detailGroupByLevels[0];
+      const exportCols = topGroupBy
         ? ["groupValue", "rowCount", ...GROUP_AGG_COLS.filter(c => c.key !== "rowCount" && dash.visibleCols.has(c.key)).map(c => c.key)]
         : TABLE_COLS.filter(c => dash.visibleCols.has(c.key)).map(c => c.key);
       const params = currentFilterParams({
         search: dash.detailSearch, sort: dash.detailSort, sortDir: dash.detailSortDir,
         columns: exportCols.join(","),
       });
-      if (dash.detailGroupBy) params.set("groupBy", dash.detailGroupBy);
+      if (topGroupBy) params.set("groupBy", topGroupBy);
 
       const res = await API.apiFetch(`/api/dashboard/export?${params.toString()}`);
       if (!res.ok) {
