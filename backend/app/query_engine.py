@@ -31,7 +31,7 @@ GMV_STATUSES_SQL = "('Hoàn thành', 'Đang giao')"
 HOAN_STATUSES_SQL = "('Hoàn hàng', 'Hoàn 1 phần')"
 
 EMPTY_SUMMARY = {
-    "kpis": {"doanhSo": 0, "gmv": 0, "huyChuaXK": 0, "huySauXK": 0, "hoan": 0, "nmv": 0, "rowCount": 0},
+    "kpis": {"doanhSo": 0, "gmv": 0, "huyChuaXK": 0, "huySauXK": 0, "hoan": 0, "discount": 0, "voucher": 0, "nmv": 0, "rowCount": 0},
     "timeline": [],
     "topProducts": [],
     "categoryBreakdown": [],
@@ -127,13 +127,15 @@ def run_summary_query(parquet_source, from_date=None, to_date=None, category=Non
               COALESCE(SUM(CASE WHEN "trangThai" = 'Hủy chưa XK' THEN "doanhSo" ELSE 0 END), 0) AS huy_chua_xk,
               COALESCE(SUM(CASE WHEN "trangThai" = 'Hủy sau XK' THEN "doanhSo" ELSE 0 END), 0) AS huy_sau_xk,
               COALESCE(SUM(CASE WHEN "trangThai" IN {HOAN_STATUSES_SQL} THEN "doanhSo" ELSE 0 END), 0) AS hoan,
-              COALESCE(SUM(CASE WHEN "trangThai" IN {GMV_STATUSES_SQL} THEN "doanhSo" - {discount_col} - {voucher_col} ELSE 0 END), 0) AS nmv,
+              COALESCE(SUM(CASE WHEN "trangThai" IN {GMV_STATUSES_SQL} THEN {discount_col} ELSE 0 END), 0) AS discount,
+              COALESCE(SUM(CASE WHEN "trangThai" IN {GMV_STATUSES_SQL} THEN {voucher_col} ELSE 0 END), 0) AS voucher,
               COUNT(*) AS row_count
             FROM read_parquet(?, union_by_name=true) WHERE {where_sql}
         """
-        total, gmv, huy_chua_xk, huy_sau_xk, hoan, nmv, row_count = con.execute(
+        total, gmv, huy_chua_xk, huy_sau_xk, hoan, discount, voucher, row_count = con.execute(
             totals_sql, [parquet_source, *params]
         ).fetchone()
+        nmv = gmv - discount - voucher
 
         timeline_sql = f"""
             SELECT strftime("date", '%Y-%m') AS month, SUM("doanhSo") AS value
@@ -171,6 +173,8 @@ def run_summary_query(parquet_source, from_date=None, to_date=None, category=Non
                 "huyChuaXK": huy_chua_xk,
                 "huySauXK": huy_sau_xk,
                 "hoan": hoan,
+                "discount": discount,
+                "voucher": voucher,
                 "nmv": nmv,
                 "rowCount": row_count,
             },

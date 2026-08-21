@@ -583,6 +583,8 @@
   function renderKPIs(kpis) {
     el("kpiDoanhSo").textContent = fmtNumber(kpis.doanhSo);
     el("kpiDoanhSoThuan").textContent = fmtNumber(kpis.gmv);
+    el("kpiDiscount").textContent = fmtNumber(kpis.discount);
+    el("kpiVoucher").textContent = fmtNumber(kpis.voucher);
     el("kpiNmv").textContent = fmtNumber(kpis.nmv);
     el("kpiHuyChuaXK").textContent = fmtNumber(kpis.huyChuaXK);
     el("kpiHuySauXK").textContent = fmtNumber(kpis.huySauXK);

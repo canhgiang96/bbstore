@@ -254,6 +254,8 @@ def test_summary_nmv_nets_out_discount_and_voucher(parquet_path_with_discounts):
     # voucher: D1 ratio 400000/1000000=0.4 -> 10000*0.4/2*2=4000;
     #          D2 ratio 600000/1000000=0.6 -> 10000*0.6/1*1=6000 -> 10000.
     assert kpis["nmv"] == 350000 - 5500 - 10000
+    assert kpis["discount"] == 5500
+    assert kpis["voucher"] == 10000
 
 
 def _write_raw_parquet(rows: list[dict]) -> str:

@@ -61,6 +61,8 @@ class KpiOut(BaseModel):
     huyChuaXK: float
     huySauXK: float
     hoan: float
+    discount: float
+    voucher: float
     nmv: float
     rowCount: int
 
