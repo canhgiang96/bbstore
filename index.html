@@ -17,138 +17,165 @@
       <span class="brand-icon">📊</span>
       <span class="brand-name">Dashboard Kinh Doanh</span>
     </div>
-    <div class="topbar-actions">
-      <button id="btnSample" class="btn btn-ghost">Dùng dữ liệu mẫu</button>
-      <button id="btnReset" class="btn btn-ghost" hidden>Tải file khác</button>
-    </div>
+    <nav class="tabs" id="mainTabs">
+      <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+      <button class="tab-btn" data-tab="orders">Đơn hàng</button>
+      <button class="tab-btn" data-tab="master">Master File</button>
+      <button class="tab-btn" data-tab="combo">Combo</button>
+      <button class="tab-btn" data-tab="cashflow">Dòng tiền</button>
+      <button class="tab-btn" data-tab="adjustments">Điều chỉnh doanh thu</button>
+    </nav>
   </div>
 </header>
 
 <main class="container">
 
-  <!-- UPLOAD SCREEN -->
-  <section id="uploadScreen" class="upload-screen">
-    <div id="dropZone" class="drop-zone">
-      <div class="drop-zone-icon">📁</div>
-      <h2>Kéo thả file Excel vào đây</h2>
-      <p>hoặc</p>
-      <label for="fileInput" class="btn btn-primary">Chọn file (.xlsx, .xls, .csv)</label>
-      <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" hidden />
-      <p class="hint">Dữ liệu được xử lý ngay trên trình duyệt của bạn — không tải lên bất kỳ máy chủ nào.</p>
+  <!-- ============ DASHBOARD TAB ============ -->
+  <section class="tab-panel" id="panel-dashboard">
+
+    <div id="dashboardEmpty" class="empty-state card" hidden>
+      <div class="empty-icon">📦</div>
+      <h2>Chưa có dữ liệu đơn hàng</h2>
+      <p class="muted">Vào tab <strong>Đơn hàng</strong> để tải lên file Excel, hoặc xem thử với dữ liệu mẫu.</p>
+      <button id="btnSample" class="btn btn-primary">Xem thử với dữ liệu mẫu</button>
+    </div>
+
+    <div id="dashboardContent" hidden>
+
+      <div class="mapping-banner card" id="mappingBanner">
+        <span id="mappingBannerText" class="muted"></span>
+        <button id="btnEditMapping" class="btn btn-ghost btn-sm">Chỉnh cột ⚙️</button>
+      </div>
+
+      <div class="filters card">
+        <div class="filter-item">
+          <label>Từ ngày</label>
+          <input type="date" id="filterFrom" />
+        </div>
+        <div class="filter-item">
+          <label>Đến ngày</label>
+          <input type="date" id="filterTo" />
+        </div>
+        <div class="filter-item filter-grow">
+          <label>Danh mục</label>
+          <select id="filterCategory"><option value="">Tất cả</option></select>
+        </div>
+        <label class="filter-checkbox" id="filterCancelledWrap" hidden>
+          <input type="checkbox" id="filterExcludeCancelled" checked />
+          Loại trừ đơn đã hủy / hoàn trả
+        </label>
+        <button id="btnClearFilter" class="btn btn-ghost">Xóa lọc</button>
+      </div>
+
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <div class="kpi-label">Tổng doanh thu</div>
+          <div class="kpi-value" id="kpiRevenue">–</div>
+          <div class="kpi-sub" id="kpiRevenueSub"></div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Tổng đơn / dòng</div>
+          <div class="kpi-value" id="kpiOrders">–</div>
+          <div class="kpi-sub" id="kpiOrdersSub"></div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Số lượng bán</div>
+          <div class="kpi-value" id="kpiQty">–</div>
+          <div class="kpi-sub" id="kpiQtySub"></div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Giá trị TB / đơn</div>
+          <div class="kpi-value" id="kpiAvg">–</div>
+          <div class="kpi-sub" id="kpiAvgSub"></div>
+        </div>
+      </div>
+
+      <div class="chart-grid">
+        <div class="card chart-card chart-wide">
+          <h3>Doanh thu theo thời gian</h3>
+          <canvas id="chartTimeline"></canvas>
+        </div>
+        <div class="card chart-card">
+          <h3>Top sản phẩm theo doanh thu</h3>
+          <canvas id="chartTopProducts"></canvas>
+        </div>
+        <div class="card chart-card" id="cardCategory">
+          <h3>Doanh thu theo danh mục</h3>
+          <canvas id="chartCategory"></canvas>
+        </div>
+        <div class="card chart-card" id="cardTopCustomers">
+          <h3>Top khách hàng</h3>
+          <canvas id="chartTopCustomers"></canvas>
+        </div>
+      </div>
+
+      <div class="card table-card">
+        <div class="table-card-header">
+          <h3>Dữ liệu chi tiết</h3>
+          <input type="text" id="tableSearch" placeholder="Tìm kiếm..." />
+        </div>
+        <div class="table-scroll">
+          <table id="dataTable">
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="table-footer">
+          <button id="btnPrev" class="btn btn-ghost">← Trước</button>
+          <span id="pageInfo" class="muted"></span>
+          <button id="btnNext" class="btn btn-ghost">Sau →</button>
+        </div>
+      </div>
     </div>
   </section>
 
-  <!-- MAPPING SCREEN -->
-  <section id="mappingScreen" class="mapping-screen" hidden>
-    <div class="card">
-      <h2>Xác nhận cột dữ liệu</h2>
-      <p class="muted">Hệ thống đã tự động nhận diện các cột bên dưới. Kiểm tra lại và chỉnh sửa nếu cần.</p>
-
-      <div class="mapping-row">
-        <label>Sheet</label>
-        <select id="sheetSelect"></select>
-      </div>
-
-      <div class="mapping-grid" id="mappingGrid"></div>
-
-      <div class="mapping-footer">
-        <span id="rowCount" class="muted"></span>
-        <button id="btnBuildDashboard" class="btn btn-primary">Tạo Dashboard →</button>
-      </div>
-    </div>
-  </section>
-
-  <!-- DASHBOARD SCREEN -->
-  <section id="dashboardScreen" class="dashboard-screen" hidden>
-
-    <div class="filters card">
-      <div class="filter-item">
-        <label>Từ ngày</label>
-        <input type="date" id="filterFrom" />
-      </div>
-      <div class="filter-item">
-        <label>Đến ngày</label>
-        <input type="date" id="filterTo" />
-      </div>
-      <div class="filter-item filter-grow">
-        <label>Danh mục</label>
-        <select id="filterCategory"><option value="">Tất cả</option></select>
-      </div>
-      <label class="filter-checkbox" id="filterCancelledWrap" hidden>
-        <input type="checkbox" id="filterExcludeCancelled" checked />
-        Loại trừ đơn đã hủy / hoàn trả
-      </label>
-      <button id="btnClearFilter" class="btn btn-ghost">Xóa lọc</button>
-    </div>
-
-    <div class="kpi-grid">
-      <div class="kpi-card">
-        <div class="kpi-label">Tổng doanh thu</div>
-        <div class="kpi-value" id="kpiRevenue">–</div>
-        <div class="kpi-sub" id="kpiRevenueSub"></div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label">Tổng đơn / dòng</div>
-        <div class="kpi-value" id="kpiOrders">–</div>
-        <div class="kpi-sub" id="kpiOrdersSub"></div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label">Số lượng bán</div>
-        <div class="kpi-value" id="kpiQty">–</div>
-        <div class="kpi-sub" id="kpiQtySub"></div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label">Giá trị TB / đơn</div>
-        <div class="kpi-value" id="kpiAvg">–</div>
-        <div class="kpi-sub" id="kpiAvgSub"></div>
-      </div>
-    </div>
-
-    <div class="chart-grid">
-      <div class="card chart-card chart-wide">
-        <h3>Doanh thu theo thời gian</h3>
-        <canvas id="chartTimeline"></canvas>
-      </div>
-      <div class="card chart-card">
-        <h3>Top sản phẩm theo doanh thu</h3>
-        <canvas id="chartTopProducts"></canvas>
-      </div>
-      <div class="card chart-card" id="cardCategory">
-        <h3>Doanh thu theo danh mục</h3>
-        <canvas id="chartCategory"></canvas>
-      </div>
-      <div class="card chart-card" id="cardTopCustomers">
-        <h3>Top khách hàng</h3>
-        <canvas id="chartTopCustomers"></canvas>
-      </div>
-    </div>
-
-    <div class="card table-card">
-      <div class="table-card-header">
-        <h3>Dữ liệu chi tiết</h3>
-        <input type="text" id="tableSearch" placeholder="Tìm kiếm..." />
-      </div>
-      <div class="table-scroll">
-        <table id="dataTable">
-          <thead></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-      <div class="table-footer">
-        <button id="btnPrev" class="btn btn-ghost">← Trước</button>
-        <span id="pageInfo" class="muted"></span>
-        <button id="btnNext" class="btn btn-ghost">Sau →</button>
-      </div>
-    </div>
-
-  </section>
+  <!-- ============ DATA MANAGER TABS (orders, master, combo, cashflow, adjustments) ============ -->
+  <section class="tab-panel" id="panel-orders" hidden></section>
+  <section class="tab-panel" id="panel-master" hidden></section>
+  <section class="tab-panel" id="panel-combo" hidden></section>
+  <section class="tab-panel" id="panel-cashflow" hidden></section>
+  <section class="tab-panel" id="panel-adjustments" hidden></section>
 
 </main>
 
 <footer class="footer">
-  <p>Dữ liệu xử lý cục bộ trên trình duyệt — không lưu trữ hay gửi đi bất kỳ đâu.</p>
+  <p>Dữ liệu được lưu trong trình duyệt của bạn (IndexedDB) — không tải lên bất kỳ máy chủ nào.</p>
 </footer>
 
-<script src="js/app.js"></script>
+<!-- ============ MODAL (add / edit row) ============ -->
+<div class="modal-overlay" id="modalOverlay" hidden>
+  <div class="modal card">
+    <div class="modal-header">
+      <h3 id="modalTitle">Thêm dòng</h3>
+      <button class="modal-close" id="modalClose">✕</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="modalCancel">Hủy</button>
+      <button class="btn btn-primary" id="modalSave">Lưu</button>
+    </div>
+  </div>
+</div>
+
+<!-- Mapping override modal, reused by dashboard's "Chỉnh cột" button -->
+<div class="modal-overlay" id="mappingModalOverlay" hidden>
+  <div class="modal card">
+    <div class="modal-header">
+      <h3>Chỉnh cột cho Dashboard</h3>
+      <button class="modal-close" id="mappingModalClose">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="muted">Chọn cột trong dữ liệu Đơn hàng đã lưu để tính toán Dashboard.</p>
+      <div class="mapping-grid" id="mappingModalGrid"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="mappingModalReset">Dùng tự động nhận diện</button>
+      <button class="btn btn-primary" id="mappingModalSave">Lưu</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/db.js?v=3"></script>
+<script src="js/app.js?v=3"></script>
 </body>
 </html>

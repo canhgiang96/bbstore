@@ -65,6 +65,22 @@ body {
 .brand-icon { font-size: 22px; }
 .topbar-actions { display: flex; gap: 10px; }
 
+/* Tabs */
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.tab-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 13.5px;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tab-btn:hover { background: var(--primary-soft); color: var(--text); }
+.tab-btn.active { background: var(--primary); color: #fff; }
+
 /* Layout */
 .container { max-width: 1280px; margin: 0 auto; padding: 24px; flex: 1; width: 100%; }
 .footer { text-align: center; padding: 20px; color: var(--text-muted); font-size: 13px; }
@@ -86,6 +102,9 @@ body {
 .btn-primary:hover { background: var(--primary-hover); }
 .btn-ghost { background: transparent; color: var(--text); border-color: var(--border); }
 .btn-ghost:hover { background: var(--primary-soft); }
+.btn-danger { background: transparent; color: var(--danger); border-color: var(--border); }
+.btn-danger:hover { background: rgba(227, 75, 75, 0.1); border-color: var(--danger); }
+.btn-sm { padding: 5px 10px; font-size: 12.5px; border-radius: 7px; }
 
 /* Card */
 .card {
@@ -96,34 +115,62 @@ body {
   padding: 20px;
 }
 
-/* Upload screen */
-.upload-screen { display: flex; justify-content: center; padding: 40px 0; }
+/* Empty state */
+.empty-state { text-align: center; padding: 56px 32px; max-width: 560px; margin: 40px auto; }
+.empty-icon { font-size: 40px; margin-bottom: 8px; }
+.empty-state h2 { margin: 8px 0 4px; font-size: 19px; }
+
+/* Drop zone (reused inside each data-manager tab) */
 .drop-zone {
-  width: 100%;
-  max-width: 560px;
   background: var(--surface);
   border: 2px dashed var(--border);
   border-radius: var(--radius);
-  padding: 56px 32px;
+  padding: 28px 24px;
   text-align: center;
   transition: border-color 0.15s, background 0.15s;
+  margin-bottom: 20px;
 }
 .drop-zone.dragover { border-color: var(--primary); background: var(--primary-soft); }
-.drop-zone-icon { font-size: 40px; margin-bottom: 8px; }
-.drop-zone h2 { margin: 8px 0 4px; font-size: 19px; }
-.drop-zone p { color: var(--text-muted); margin: 6px 0; }
-.hint { font-size: 12.5px; margin-top: 18px; }
+.drop-zone-icon { font-size: 32px; margin-bottom: 4px; }
+.drop-zone h2 { margin: 6px 0 4px; font-size: 16px; }
+.drop-zone p { color: var(--text-muted); margin: 4px 0; }
+.hint { font-size: 12.5px; margin-top: 10px; }
 
-/* Mapping screen */
-.mapping-screen { display: flex; justify-content: center; padding: 20px 0; }
-.mapping-screen .card { width: 100%; max-width: 760px; }
-.mapping-row { display: flex; align-items: center; gap: 12px; margin: 16px 0; }
-.mapping-row label { font-weight: 600; min-width: 60px; }
+/* Mapping banner + grid (also reused inside the mapping-override modal) */
+.mapping-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; padding: 14px 20px; }
 .mapping-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 20px; margin-top: 10px; }
 .mapping-field { display: flex; flex-direction: column; gap: 6px; }
 .mapping-field label { font-size: 13px; font-weight: 600; color: var(--text-muted); }
 .mapping-field .req::after { content: " *"; color: var(--danger); }
-.mapping-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 24px; }
+
+/* Data manager (per-tab CRUD table) */
+.data-panel-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
+.data-panel-header h2 { margin: 0; font-size: 19px; }
+.data-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.data-toolbar input[type="text"] { width: 240px; }
+.data-toolbar .spacer { flex: 1; }
+.row-actions { display: flex; gap: 6px; }
+.import-summary { font-size: 13px; margin-top: 8px; }
+.import-summary.ok { color: var(--success); }
+.import-summary.err { color: var(--danger); }
+
+/* Modal */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(10, 12, 20, 0.45);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100; padding: 20px;
+}
+.modal { width: 100%; max-width: 640px; max-height: 85vh; display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.modal-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px; border-bottom: 1px solid var(--border); }
+.modal-header h3 { margin: 0; font-size: 17px; }
+.modal-close { background: transparent; border: none; font-size: 16px; cursor: pointer; color: var(--text-muted); padding: 4px 8px; }
+.modal-body { padding: 20px; overflow-y: auto; }
+.modal-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 20px; border-top: 1px solid var(--border); }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 20px; }
+.form-field { display: flex; flex-direction: column; gap: 6px; }
+.form-field label { font-size: 12.5px; font-weight: 600; color: var(--text-muted); }
+.form-field input { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 14px; color: var(--text); font-family: inherit; }
+.form-field input:disabled { opacity: 0.6; }
 
 select, input[type="text"], input[type="date"] {
   background: var(--bg);
@@ -188,6 +235,7 @@ tbody tr:hover { background: var(--primary-soft); }
   .kpi-grid { grid-template-columns: 1fr 1fr; }
   .chart-grid { grid-template-columns: 1fr; }
   .mapping-grid { grid-template-columns: 1fr; }
+  .form-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 560px) {
   .kpi-grid { grid-template-columns: 1fr; }

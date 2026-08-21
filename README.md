@@ -1,20 +1,25 @@
 # 📊 Dashboard Kinh Doanh
 
-Trang web tổng hợp dữ liệu kinh doanh và tạo báo cáo dashboard trực tiếp từ file Excel — chạy hoàn toàn trên trình duyệt, không cần server, dữ liệu không rời khỏi máy của bạn.
+Trang web tổng hợp dữ liệu kinh doanh từ nhiều file Excel (đơn hàng, master file, combo, dòng tiền, điều chỉnh doanh thu) và tạo báo cáo dashboard — chạy hoàn toàn trên trình duyệt, không cần server. Dữ liệu được lưu lại trong trình duyệt (IndexedDB) nên vẫn còn khi bạn đóng và mở lại trang.
 
 **Demo trực tuyến:** _(cập nhật link GitHub Pages sau khi publish)_
 
 ## Tính năng
 
-- Upload file `.xlsx`, `.xls`, `.csv` (kéo thả hoặc chọn file)
-- Tự động nhận diện các cột: Ngày, Sản phẩm, Danh mục, Khách hàng, Số lượng, Đơn giá, Doanh thu
-- Cho phép chỉnh lại ánh xạ cột nếu nhận diện chưa đúng
+**Dashboard**
+- Tự động nhận diện các cột: Ngày, Sản phẩm, Danh mục, Khách hàng, Số lượng, Đơn giá, Doanh thu, Trạng thái đơn hàng, Mã đơn hàng, SKU phân loại hàng
+- Nút "Chỉnh cột ⚙️" để ghi đè nhận diện tự động khi cần
 - Tự tính Doanh thu = Đơn giá × Số lượng nếu file không có sẵn cột doanh thu
+- Tự loại trừ đơn đã hủy/hoàn trả khỏi số liệu (dựa trên cột Trạng thái đơn hàng)
 - Bộ lọc theo khoảng thời gian và danh mục
-- 4 chỉ số KPI: Tổng doanh thu, Tổng đơn/dòng, Số lượng bán, Giá trị trung bình/đơn
-- 4 biểu đồ: Doanh thu theo thời gian, Top sản phẩm, Doanh thu theo danh mục, Top khách hàng
-- Bảng dữ liệu chi tiết có tìm kiếm và phân trang
+- 4 chỉ số KPI, 4 biểu đồ, bảng dữ liệu chi tiết có tìm kiếm và phân trang
 - Nút "Dùng dữ liệu mẫu" để xem thử ngay không cần file
+
+**Quản lý dữ liệu (5 tab riêng: Đơn hàng, Master File, Combo, Dòng tiền, Điều chỉnh doanh thu)**
+- Upload file `.xlsx`, `.xls`, `.csv` (kéo thả hoặc chọn file) — dữ liệu được lưu vào IndexedDB của trình duyệt
+- Với Master File / Combo / Dòng tiền: tải lên lại sẽ **cập nhật** dòng có khóa trùng (SKU phân loại / SKU COMBO / Mã đơn hàng) thay vì tạo trùng lặp
+- Thêm dòng thủ công, sửa từng dòng, xóa từng dòng, hoặc xóa toàn bộ dữ liệu một loại
+- Tìm kiếm và phân trang trên mỗi bảng dữ liệu
 
 ## Cách dùng
 
@@ -39,6 +44,11 @@ Không bắt buộc phải có đủ tất cả các cột — chỉ cần cột
 - HTML/CSS/JavaScript thuần, không cần build
 - [SheetJS (xlsx)](https://sheetjs.com/) để đọc file Excel
 - [Chart.js](https://www.chartjs.org/) để vẽ biểu đồ
+- IndexedDB (`js/db.js`) để lưu dữ liệu trong trình duyệt
+
+## Lưu ý về dữ liệu
+
+Dữ liệu lưu trong IndexedDB chỉ tồn tại **trên trình duyệt/máy hiện tại** — mở trang bằng trình duyệt khác hoặc máy khác sẽ không thấy dữ liệu cũ. Đây chưa phải nơi ghép nối (join) dữ liệu giữa 5 loại file để tính lợi nhuận thực — phần đó sẽ được bổ sung sau khi có công thức tính toán cụ thể.
 
 ## Deploy lên GitHub Pages
 
