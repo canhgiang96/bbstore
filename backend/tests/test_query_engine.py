@@ -298,6 +298,27 @@ def _write_raw_parquet(rows: list[dict]) -> str:
     return path
 
 
+def test_summary_gmv_uses_so_luong_thuc_not_quantity():
+    # The real pipeline can never produce a "Hoàn thành"/"Đang giao" row
+    # with quantity != soLuongThuc (derive_order_status requires
+    # returnedQty == 0 for those statuses) — so this writes a raw Parquet
+    # row directly to prove the SQL itself uses "soLuongThuc", not
+    # "quantity"/"doanhSo", for GMV.
+    rows = [
+        {"date": datetime(2026, 2, 1), "orderId": "G1", "sku": "X1",
+         "skuVariant": "X1-1", "product": "SP X", "category": "Áo", "customer": "(Không rõ)",
+         "quantity": 5.0, "returnedQty": 2.0, "soLuongThuc": 3.0, "price": 0.0, "originalPrice": 10000.0,
+         "revenue": 0.0, "doanhSo": 50000.0, "status": "Hoàn thành", "trangThai": "Hoàn thành",
+         "discount": 0.0, "voucher": 0.0},
+    ]
+    path = _write_raw_parquet(rows)
+    try:
+        result = run_summary_query(path)
+        assert result["kpis"]["gmv"] == 30000  # 10000 * 3 (soLuongThuc), not 10000 * 5 (quantity)
+    finally:
+        os.remove(path)
+
+
 @pytest.fixture
 def old_schema_parquet_path():
     # No "discount"/"voucher" keys at all — mirrors a pre-feature Report.

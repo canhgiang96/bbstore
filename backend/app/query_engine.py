@@ -122,7 +122,7 @@ def run_summary_query(parquet_source, from_date=None, to_date=None, category=Non
         totals_sql = f"""
             SELECT
               COALESCE(SUM("doanhSo"), 0) AS total,
-              COALESCE(SUM(CASE WHEN "trangThai" IN {GMV_STATUSES_SQL} THEN "doanhSo" ELSE 0 END), 0) AS gmv,
+              COALESCE(SUM(CASE WHEN "trangThai" IN {GMV_STATUSES_SQL} THEN "originalPrice" * "soLuongThuc" ELSE 0 END), 0) AS gmv,
               COALESCE(SUM(CASE WHEN "trangThai" = 'Hủy chưa XK' THEN "doanhSo" ELSE 0 END), 0) AS huy_chua_xk,
               COALESCE(SUM(CASE WHEN "trangThai" = 'Hủy sau XK' THEN "doanhSo" ELSE 0 END), 0) AS huy_sau_xk,
               COALESCE(SUM("originalPrice" * "returnedQty"), 0) AS hoan,
