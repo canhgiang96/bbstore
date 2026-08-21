@@ -8,7 +8,6 @@ class Settings(BaseSettings):
 
     supabase_url: str
     supabase_service_role_key: str
-    supabase_jwt_secret: str
 
     r2_account_id: str
     r2_access_key_id: str

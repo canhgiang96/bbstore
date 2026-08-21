@@ -6,7 +6,6 @@ import os
 
 os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
-os.environ.setdefault("SUPABASE_JWT_SECRET", "test-supabase-jwt-secret")
 os.environ.setdefault("R2_ACCOUNT_ID", "test-account-id")
 os.environ.setdefault("R2_ACCESS_KEY_ID", "test-access-key")
 os.environ.setdefault("R2_SECRET_ACCESS_KEY", "test-secret-key")

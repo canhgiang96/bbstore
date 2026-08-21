@@ -38,12 +38,11 @@ vars used.
 | Variable | Where to get it |
 |---|---|
 | `SUPABASE_URL` | Supabase project → Settings → API → Project URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase project → Settings → API → `service_role` key |
-| `SUPABASE_JWT_SECRET` | Supabase project → Settings → API → JWT Secret |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase project → Settings → API Keys → **Secret keys** (new key system) — or **Legacy anon, service_role API keys** tab → `service_role` if your project still uses the old system |
 | `R2_ACCOUNT_ID` | Cloudflare dashboard, right side of the R2 page |
 | `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | R2 → Manage API Tokens → the token you created |
 | `R2_BUCKET_NAME` | The R2 bucket name (e.g. `bbstore-reports`) |
-| `APP_JWT_SECRET` | Generate your own: `python -c "import secrets; print(secrets.token_urlsafe(48))"` — this signs the app's own login tokens, unrelated to Supabase's JWT secret |
+| `APP_JWT_SECRET` | Generate your own: `python -c "import secrets; print(secrets.token_urlsafe(48))"` — signs the app's own login tokens, unrelated to anything Supabase-issued |
 
 Set all of these as environment variables directly in Render's dashboard —
 never commit real values to the repo (`.env` is gitignored).
