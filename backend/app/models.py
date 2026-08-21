@@ -66,6 +66,7 @@ class KpiOut(BaseModel):
     platformFee: float
     piship: float
     phiAff: float
+    doanhThuThuan: float
     nmv: float
     rowCount: int
 

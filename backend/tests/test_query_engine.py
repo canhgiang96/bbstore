@@ -235,12 +235,20 @@ def test_rows_empty_source_list_returns_empty_page():
     assert result["rows"] == []
 
 
-def test_summary_nmv_is_gmv_when_no_discount_or_voucher(parquet_path):
+def test_summary_doanh_thu_thuan_is_gmv_when_no_discount_or_voucher(parquet_path):
     # parquet_path has no "Người bán trợ giá"/"Mã giảm giá của Shop"/"Số
     # tiền người mua thanh toán" columns mapped, so discount/voucher are 0
-    # for every row -> NMV should equal GMV exactly.
+    # for every row -> Doanh thu thuần should equal GMV exactly.
     result = run_summary_query(parquet_path)
-    assert result["kpis"]["nmv"] == result["kpis"]["gmv"] == 450000
+    assert result["kpis"]["doanhThuThuan"] == result["kpis"]["gmv"] == 450000
+
+
+def test_summary_nmv_also_nets_out_piship_even_without_fee_columns(parquet_path):
+    # Piship (1.620/order) is computed unconditionally (it doesn't depend on
+    # any mapped fee column) — parquet_path has 6 rows, each its own order,
+    # so NMV must be Doanh thu thuần minus 1.620 x 6, not equal to it.
+    result = run_summary_query(parquet_path)
+    assert result["kpis"]["nmv"] == result["kpis"]["doanhThuThuan"] - 1620 * 6
 
 
 DISCOUNT_HEADERS = HEADERS + ["Người bán trợ giá", "Mã giảm giá của Shop", "Số tiền người mua thanh toán"]
@@ -276,7 +284,7 @@ def parquet_path_with_discounts():
     os.remove(path)
 
 
-def test_summary_nmv_nets_out_discount_and_voucher(parquet_path_with_discounts):
+def test_summary_doanh_thu_thuan_nets_out_discount_and_voucher(parquet_path_with_discounts):
     result = run_summary_query(parquet_path_with_discounts)
     kpis = result["kpis"]
     # doanhSo: D1 = 100000*2 = 200000, D2 = 150000*1 = 150000 -> 350000 total, all GMV.
@@ -284,9 +292,22 @@ def test_summary_nmv_nets_out_discount_and_voucher(parquet_path_with_discounts):
     # discount: D1 = 4000/2*2 = 4000, D2 = 1500/1*1 = 1500 -> 5500.
     # voucher: D1 ratio 400000/1000000=0.4 -> 10000*0.4/2*2=4000;
     #          D2 ratio 600000/1000000=0.6 -> 10000*0.6/1*1=6000 -> 10000.
-    assert kpis["nmv"] == 350000 - 5500 - 10000
+    assert kpis["doanhThuThuan"] == 350000 - 5500 - 10000
     assert kpis["discount"] == 5500
     assert kpis["voucher"] == 10000
+
+
+def test_summary_nmv_further_nets_out_platform_fee_piship_and_phi_aff(parquet_path_with_discounts):
+    # Doanh thu thuần = 334.500 (see test above). D1's 2 lines are one order
+    # -> Piship (1.620) applies once, to the first line only. No fee columns
+    # mapped in this fixture -> platformFee=0; no cashflow_source -> phiAff=0.
+    result = run_summary_query(parquet_path_with_discounts)
+    kpis = result["kpis"]
+    assert kpis["doanhThuThuan"] == 334500
+    assert kpis["platformFee"] == 0
+    assert kpis["piship"] == 1620
+    assert kpis["phiAff"] == 0
+    assert kpis["nmv"] == 334500 - 0 - 1620 - 0
 
 
 def _write_raw_parquet(rows: list[dict]) -> str:
@@ -362,7 +383,12 @@ def test_summary_mixed_old_and_new_schema_reports_via_union_by_name(
     result = run_summary_query([old_schema_parquet_path, parquet_path_with_discounts])
     assert result["kpis"]["rowCount"] == 1 + 2
     assert result["kpis"]["doanhSo"] == 200000 + 350000
-    assert result["kpis"]["nmv"] == (200000 - 0 - 0) + (350000 - 5500 - 10000)
+    doanh_thu_thuan = (200000 - 0 - 0) + (350000 - 5500 - 10000)
+    assert result["kpis"]["doanhThuThuan"] == doanh_thu_thuan
+    # D1's 2-line order -> Piship (1.620) once; OLD1 has no piship column at
+    # all (COALESCEs to 0 via union_by_name), not a second order's worth.
+    assert result["kpis"]["piship"] == 1620
+    assert result["kpis"]["nmv"] == doanh_thu_thuan - 1620
 
 
 def test_rows_mixed_old_and_new_schema_reports_via_union_by_name(

@@ -42,7 +42,7 @@ EMPTY_SUMMARY = {
     "kpis": {
         "doanhSo": 0, "gmv": 0, "huyChuaXK": 0, "huySauXK": 0, "hoan": 0,
         "discount": 0, "voucher": 0, "platformFee": 0, "piship": 0, "phiAff": 0,
-        "nmv": 0, "rowCount": 0,
+        "doanhThuThuan": 0, "nmv": 0, "rowCount": 0,
     },
     "timeline": [],
     "topProducts": [],
@@ -182,7 +182,8 @@ def run_summary_query(
         total, gmv, huy_chua_xk, huy_sau_xk, hoan, discount, voucher, platform_fee, piship, phi_aff, row_count = con.execute(
             totals_sql, [parquet_source, *cf_join_params, *params]
         ).fetchone()
-        nmv = gmv - discount - voucher
+        doanh_thu_thuan = gmv - discount - voucher
+        nmv = doanh_thu_thuan - platform_fee - piship - phi_aff
 
         timeline_sql = f"""
             SELECT strftime("date", '%Y-%m') AS month, SUM("doanhSo") AS value
@@ -225,6 +226,7 @@ def run_summary_query(
                 "platformFee": platform_fee,
                 "piship": piship,
                 "phiAff": phi_aff,
+                "doanhThuThuan": doanh_thu_thuan,
                 "nmv": nmv,
                 "rowCount": row_count,
             },

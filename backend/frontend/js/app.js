@@ -689,6 +689,7 @@
     el("kpiDoanhSoThuan").textContent = fmtNumber(kpis.gmv);
     el("kpiDiscount").textContent = fmtNumber(kpis.discount);
     el("kpiVoucher").textContent = fmtNumber(kpis.voucher);
+    el("kpiDoanhThuThuan").textContent = fmtNumber(kpis.doanhThuThuan);
     el("kpiNmv").textContent = fmtNumber(kpis.nmv);
     el("kpiHuyChuaXK").textContent = fmtNumber(kpis.huyChuaXK);
     el("kpiHuySauXK").textContent = fmtNumber(kpis.huySauXK);
