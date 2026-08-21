@@ -544,6 +544,11 @@
     renderKPIs(summary.kpis);
     renderFacets(summary.facets);
     renderCharts(summary);
+    // TEMP DEBUG — remove once the filter issue is confirmed fixed.
+    const debugEl = el("dashboardFilterDebug");
+    if (debugEl) {
+      debugEl.textContent = `[debug] gửi: /api/dashboard/summary?${params.toString()} → server trả về ${summary.kpis.rowCount} dòng, doanhSo=${summary.kpis.doanhSo}`;
+    }
   }
 
   async function fetchAndRenderRows() {
