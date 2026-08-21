@@ -92,8 +92,13 @@
   async function apiJson(path, options = {}) {
     const res = await apiFetch(path, options);
     if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.detail || `Lỗi ${res.status}`);
+      // TEMP DEBUG: include a snippet of the raw body (even non-JSON, e.g.
+      // an infra-level HTML error page) so the real cause is visible.
+      const raw = await res.text().catch(() => "");
+      let detail;
+      try { detail = JSON.parse(raw).detail; } catch (e) { /* not JSON */ }
+      const snippet = raw ? raw.replace(/\s+/g, " ").trim().slice(0, 200) : "";
+      throw new Error(detail || `Lỗi ${res.status}${snippet ? " — " + snippet : ""}`);
     }
     if (res.status === 204) return null;
     return res.json();
