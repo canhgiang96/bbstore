@@ -9,7 +9,7 @@ import pytest
 from openpyxl import Workbook
 
 from app.excel_to_parquet import excel_to_parquet
-from app.query_engine import run_rows_query, run_summary_query
+from app.query_engine import run_export_query, run_grouped_rows_query, run_rows_query, run_summary_query
 
 HEADERS = [
     "Mã đơn hàng", "Ngày đặt hàng", "Trạng Thái Đơn Hàng", "Lý do hủy",
@@ -712,3 +712,101 @@ def test_rows_new_filters_narrow_by_master_file_categories_and_sku(
 
     result_sku = run_rows_query(parquet_path_with_discounts, page_size=10, sku="a100")
     assert {r["skuVariant"] for r in result_sku["rows"]} == {"A100-1"}
+
+
+# ---- Detail-table "Group theo" sub-tab: run_grouped_rows_query, the
+# group_by/group_value drill-down on run_rows_query, and run_export_query.
+# Uses parquet_path (O1..O6, categories Áo/Quần, mixed statuses) — doanhSo
+# is "originalPrice * quantity" (NOT netted by returns — see
+# test_summary_category_filter's comment): O1=200000, O2=150000, O3=80000,
+# O4=150000, O5=200000, O6=160000. Áo (O1,O3,O5) sums to 480000, Quần
+# (O2,O4,O6) sums to 460000.
+
+def test_grouped_rows_aggregates_match_category_filtered_summary(parquet_path):
+    result = run_grouped_rows_query(parquet_path, group_by="category", page_size=10)
+    assert result["total"] == 2
+    by_group = {r["groupValue"]: r for r in result["rows"]}
+    assert set(by_group) == {"Áo", "Quần"}
+    assert by_group["Áo"]["rowCount"] == 3
+    assert by_group["Quần"]["rowCount"] == 3
+    assert by_group["Áo"]["doanhSo"] == run_summary_query(parquet_path, category="Áo")["kpis"]["doanhSo"]
+    assert by_group["Quần"]["doanhSo"] == run_summary_query(parquet_path, category="Quần")["kpis"]["doanhSo"]
+
+
+def test_grouped_rows_sort_by_doanh_so_both_directions(parquet_path):
+    desc = run_grouped_rows_query(parquet_path, group_by="category", page_size=10)
+    assert [r["groupValue"] for r in desc["rows"]] == ["Áo", "Quần"]  # 480000 > 460000, default desc
+
+    asc = run_grouped_rows_query(parquet_path, group_by="category", sort="doanhSo", sort_dir="asc", page_size=10)
+    assert [r["groupValue"] for r in asc["rows"]] == ["Quần", "Áo"]
+
+
+def test_grouped_rows_pagination(parquet_path):
+    page1 = run_grouped_rows_query(parquet_path, group_by="category", page=1, page_size=1)
+    page2 = run_grouped_rows_query(parquet_path, group_by="category", page=2, page_size=1)
+    assert page1["total"] == page2["total"] == 2
+    assert [r["groupValue"] for r in page1["rows"]] == ["Áo"]
+    assert [r["groupValue"] for r in page2["rows"]] == ["Quần"]
+
+
+def test_grouped_rows_respects_existing_filters(parquet_path):
+    # Only O5 (Áo) has trangThai exactly "Hoàn thành" (see
+    # test_summary_facets_unaffected_by_status_filter).
+    result = run_grouped_rows_query(parquet_path, group_by="category", status="Hoàn thành", page_size=10)
+    assert result["total"] == 1
+    assert result["rows"][0]["groupValue"] == "Áo"
+    assert result["rows"][0]["rowCount"] == 1
+    assert result["rows"][0]["doanhSo"] == 200000
+
+
+def test_grouped_rows_group_by_status(parquet_path):
+    result = run_grouped_rows_query(parquet_path, group_by="status", page_size=10)
+    assert result["total"] == 6
+    assert {r["groupValue"] for r in result["rows"]} == {
+        "Hủy sau XK", "Hủy chưa XK", "Hoàn hàng", "Hoàn 1 phần", "Hoàn thành", "Đang giao",
+    }
+
+
+def test_grouped_rows_group_by_warehouse_type_from_master_file(parquet_path_with_discounts, master_parquet_path):
+    result = run_grouped_rows_query(
+        parquet_path_with_discounts, group_by="warehouseType", master_source=[master_parquet_path], page_size=10,
+    )
+    by_group = {r["groupValue"]: r for r in result["rows"]}
+    assert by_group["Kho HN"]["rowCount"] == 1
+    assert by_group["Kho HCM"]["rowCount"] == 1
+
+
+def test_grouped_rows_invalid_group_by_returns_empty(parquet_path):
+    result = run_grouped_rows_query(parquet_path, group_by="not_a_real_column", page_size=10)
+    assert result == {"rows": [], "total": 0, "page": 1, "pageSize": 10}
+
+
+def test_rows_drill_down_narrows_to_group(parquet_path):
+    result = run_rows_query(parquet_path, page_size=10, group_by="category", group_value="Áo")
+    assert result["total"] == 3
+    assert {r["orderId"] for r in result["rows"]} == {"O1", "O3", "O5"}
+
+
+def test_rows_drill_down_invalid_group_by_ignored(parquet_path):
+    result = run_rows_query(parquet_path, page_size=10, group_by="not_a_real_column", group_value="Áo")
+    assert result["total"] == 6  # no filter applied — falls through untouched
+
+
+def test_export_query_ungrouped_returns_every_row_unpaginated(parquet_path):
+    rows = run_export_query(parquet_path)
+    assert len(rows) == 6
+    assert {r["orderId"] for r in rows} == {"O1", "O2", "O3", "O4", "O5", "O6"}
+
+
+def test_export_query_grouped_returns_every_group_unpaginated(parquet_path):
+    rows = run_export_query(parquet_path, group_by="category")
+    assert len(rows) == 2
+    by_group = {r["groupValue"]: r for r in rows}
+    assert by_group["Áo"]["rowCount"] == 3
+    assert by_group["Quần"]["rowCount"] == 3
+
+
+def test_export_query_respects_filters(parquet_path):
+    rows = run_export_query(parquet_path, category="Áo")
+    assert len(rows) == 3
+    assert {r["orderId"] for r in rows} == {"O1", "O3", "O5"}

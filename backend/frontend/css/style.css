@@ -248,6 +248,40 @@ tbody td { padding: 8px 12px; border-bottom: 1px solid var(--border); white-spac
 tbody tr:hover { background: var(--primary-soft); }
 .table-footer { display: flex; align-items: center; justify-content: center; gap: 16px; margin-top: 12px; }
 
+/* Dashboard sub-tabs (Tổng quan / Dữ liệu chi tiết) — reuses .tabs/.tab-btn */
+.subtabs { margin-bottom: 20px; }
+
+/* Detail-table toolbar */
+.detail-toolbar { align-items: flex-end; flex-wrap: wrap; gap: 12px; }
+.detail-toolbar-controls { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.detail-toolbar-controls .filter-item { min-width: 160px; }
+.detail-toolbar-controls input#tableSearch { width: 200px; }
+
+/* Column picker (native <details> popover — no click-outside JS needed) */
+.col-picker { position: relative; }
+.col-picker summary { list-style: none; cursor: pointer; }
+.col-picker summary::-webkit-details-marker { display: none; }
+.col-picker-list {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 20;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: var(--shadow); padding: 10px; min-width: 220px; max-height: 320px;
+  overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
+}
+.col-picker-list label { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+
+/* Sortable detail-table headers */
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { background: var(--primary-soft); }
+th.sortable .sort-arrow { margin-left: 4px; opacity: 0.5; }
+th.sortable.sort-active .sort-arrow { opacity: 1; }
+
+/* Group rows in the "Group theo" view */
+tr.group-row { background: var(--primary-soft); font-weight: 700; cursor: pointer; }
+tr.group-row:hover { background: var(--primary-soft); }
+tr.group-row .group-chevron { display: inline-block; width: 14px; }
+tr.group-detail-row td:first-child { padding-left: 28px; }
+tr.group-detail-row { background: var(--bg); }
+
 .muted { color: var(--text-muted); font-size: 13px; }
 
 @media (max-width: 900px) {

@@ -58,9 +58,13 @@
 
   /* ================= Tabs ================= */
   function initTabs() {
-    document.querySelectorAll(".tab-btn").forEach(btn => {
+    // Scoped to #mainTabs — the Dashboard's own sub-tab nav (#dashboardSubtabs,
+    // see wireSubtabs) reuses the same .tab-btn class for visual styling only
+    // and must not be picked up here (its buttons carry data-subtab, not
+    // data-tab).
+    document.querySelectorAll("#mainTabs .tab-btn").forEach(btn => {
       btn.addEventListener("click", () => {
-        document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+        document.querySelectorAll("#mainTabs .tab-btn").forEach(b => b.classList.remove("active"));
         btn.classList.add("active");
         document.querySelectorAll(".tab-panel").forEach(p => { p.hidden = true; });
         el("panel-" + btn.dataset.tab).hidden = false;
@@ -764,14 +768,20 @@
   const dash = {
     reportsCount: 0,
     readyCount: 0,
-    tableSearch: "",
-    tablePage: 1,
-    tablePageSize: 15,
-    tableSort: "date",
-    tableSortDir: "asc",
+    subtab: "overview",
+    detailSearch: "",
+    detailGroupBy: "",
+    detailSort: "date",
+    detailSortDir: "asc",
+    detailPage: 1,
+    detailPageSize: 15,
+    visibleCols: null, // Set, lazily loaded from localStorage — TABLE_COLS isn't defined yet at this point in the file
+    expandedGroups: new Map(), // groupValue -> { rows, total, page, pageSize, loading }
+    lastDetailResult: null,
+    lastDetailGrouped: false,
     filtersWired: false,
     summarySeq: 0,
-    rowsSeq: 0,
+    detailSeq: 0,
   };
 
   async function refreshDashboard() {
@@ -802,7 +812,9 @@
     el("dashboardSourceNote").textContent = `Tổng hợp ${dash.readyCount.toLocaleString("vi-VN")} Report đã sẵn sàng`;
 
     if (!dash.filtersWired) { initDashboardFilters(); dash.filtersWired = true; }
-    await Promise.all([fetchAndRenderSummary(), fetchAndRenderRows()]);
+    // Both sub-tabs are fetched together so switching "Tổng quan"/"Dữ liệu
+    // chi tiết" is instant — no re-fetch on tab switch.
+    await Promise.all([fetchAndRenderSummary(), fetchAndRenderDetailTable()]);
   }
 
   function currentFilterParams(extra) {
@@ -825,10 +837,59 @@
     return params;
   }
 
+  function wireSubtabs() {
+    document.querySelectorAll("#dashboardSubtabs .tab-btn").forEach(btn => {
+      btn.onclick = () => {
+        document.querySelectorAll("#dashboardSubtabs .tab-btn").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        dash.subtab = btn.dataset.subtab;
+        el("dashboardOverview").hidden = dash.subtab !== "overview";
+        el("dashboardDetail").hidden = dash.subtab !== "detail";
+      };
+    });
+  }
+
+  const VISIBLE_COLS_KEY = "bbstore_detail_visible_cols";
+
+  function ensureVisibleCols() {
+    if (dash.visibleCols) return;
+    let cols = null;
+    try {
+      const raw = localStorage.getItem(VISIBLE_COLS_KEY);
+      if (raw) {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) cols = arr.filter(k => TABLE_COLS.some(c => c.key === k));
+      }
+    } catch (e) { /* ignore corrupt localStorage value */ }
+    dash.visibleCols = new Set(cols && cols.length ? cols : TABLE_COLS.map(c => c.key));
+  }
+
+  function saveVisibleCols() {
+    try { localStorage.setItem(VISIBLE_COLS_KEY, JSON.stringify([...dash.visibleCols])); } catch (e) { /* storage unavailable */ }
+  }
+
+  function renderColumnPicker() {
+    const list = el("colPickerList");
+    list.innerHTML = TABLE_COLS.map(c =>
+      `<label><input type="checkbox" data-col="${escapeHtml(c.key)}" ${dash.visibleCols.has(c.key) ? "checked" : ""}/> ${escapeHtml(c.label)}</label>`
+    ).join("");
+    list.querySelectorAll("input[data-col]").forEach(cb => {
+      cb.onchange = () => {
+        const key = cb.dataset.col;
+        if (cb.checked) dash.visibleCols.add(key);
+        else if (dash.visibleCols.size > 1) dash.visibleCols.delete(key);
+        else cb.checked = true; // always keep at least 1 column visible
+        saveVisibleCols();
+        rerenderDetailTableOnly();
+      };
+    });
+  }
+
   // Filters only apply when the user clicks "Tìm kiếm" (not on every field
   // change) — this also avoids a race where an earlier, slower request
   // (e.g. the initial unfiltered load) resolves after a later filtered one
-  // and overwrites it; fetchAndRenderSummary/Rows guard against that too.
+  // and overwrites it; fetchAndRenderSummary/DetailTable guard against
+  // that too.
   function initDashboardFilters() {
     el("btnApplyFilter").onclick = () => applyFiltersAndRender();
     el("btnClearFilter").onclick = () => {
@@ -842,18 +903,34 @@
       applyFiltersAndRender();
     };
     el("tableSearch").oninput = e => {
-      dash.tableSearch = e.target.value;
-      dash.tablePage = 1;
-      fetchAndRenderRows();
+      dash.detailSearch = e.target.value;
+      dash.detailPage = 1;
+      dash.expandedGroups.clear();
+      fetchAndRenderDetailTable();
     };
-    el("btnPrev").onclick = () => { if (dash.tablePage > 1) { dash.tablePage--; fetchAndRenderRows(); } };
-    el("btnNext").onclick = () => { dash.tablePage++; fetchAndRenderRows(); };
+    el("detailGroupBy").onchange = e => {
+      dash.detailGroupBy = e.target.value;
+      dash.detailPage = 1;
+      dash.detailSort = dash.detailGroupBy ? "doanhSo" : "date";
+      dash.detailSortDir = dash.detailGroupBy ? "desc" : "asc";
+      dash.expandedGroups.clear();
+      fetchAndRenderDetailTable();
+    };
+    el("detailPrev").onclick = () => {
+      if (dash.detailPage > 1) { dash.detailPage--; dash.expandedGroups.clear(); fetchAndRenderDetailTable(); }
+    };
+    el("detailNext").onclick = () => { dash.detailPage++; dash.expandedGroups.clear(); fetchAndRenderDetailTable(); };
+    el("btnExportExcel").onclick = () => exportExcel();
+    wireSubtabs();
+    ensureVisibleCols();
+    renderColumnPicker();
   }
 
   function applyFiltersAndRender() {
-    dash.tablePage = 1;
+    dash.detailPage = 1;
+    dash.expandedGroups.clear();
     fetchAndRenderSummary();
-    fetchAndRenderRows();
+    fetchAndRenderDetailTable();
   }
 
   async function fetchAndRenderSummary() {
@@ -869,21 +946,30 @@
     }
   }
 
-  async function fetchAndRenderRows() {
-    const seq = ++dash.rowsSeq;
-    const params = currentFilterParams({
-      search: dash.tableSearch,
-      sort: dash.tableSort,
-      sort_dir: dash.tableSortDir,
-      page: dash.tablePage,
-      pageSize: dash.tablePageSize,
-    });
+  async function fetchAndRenderDetailTable() {
+    const seq = ++dash.detailSeq;
+    ensureVisibleCols();
     try {
-      const result = await API.apiJson(`/api/dashboard/rows?${params.toString()}`);
-      if (seq !== dash.rowsSeq) return; // a newer request already superseded this one
-      renderTable(result);
+      if (dash.detailGroupBy) {
+        const params = currentFilterParams({
+          search: dash.detailSearch, groupBy: dash.detailGroupBy,
+          sort: dash.detailSort, sortDir: dash.detailSortDir,
+          page: dash.detailPage, pageSize: dash.detailPageSize,
+        });
+        const result = await API.apiJson(`/api/dashboard/rows/grouped?${params.toString()}`);
+        if (seq !== dash.detailSeq) return; // a newer request already superseded this one
+        renderGroupedTable(result);
+      } else {
+        const params = currentFilterParams({
+          search: dash.detailSearch, sort: dash.detailSort, sort_dir: dash.detailSortDir,
+          page: dash.detailPage, pageSize: dash.detailPageSize,
+        });
+        const result = await API.apiJson(`/api/dashboard/rows?${params.toString()}`);
+        if (seq !== dash.detailSeq) return;
+        renderFlatTable(result);
+      }
     } catch (err) {
-      console.error("Dashboard rows fetch failed:", err);
+      console.error("Dashboard detail-table fetch failed:", err);
     }
   }
 
@@ -954,20 +1040,244 @@
     { key: "trangThai", label: "Trạng thái" },
   ];
 
-  function renderTable(result) {
-    const thead = document.querySelector("#dataTable thead");
-    const tbody = document.querySelector("#dataTable tbody");
-    thead.innerHTML = "<tr>" + TABLE_COLS.map(c => `<th>${c.label}</th>`).join("") + "</tr>";
+  // Mirrors app/query_engine.py's ALLOWED_SORT_COLUMNS — only these flat
+  // columns are click-to-sort; the backend silently falls back to "date"
+  // for anything else, so the UI must not offer a sort arrow it can't honor.
+  const SORTABLE_FLAT_COLUMNS = new Set([
+    "date", "orderId", "product", "category", "customer", "quantity", "doanhSo", "trangThai",
+  ]);
+
+  // Mirrors app/routers/dashboard.py's GROUP_BY_LABELS/GROUP_AGG_LABELS —
+  // the grouped view's own column set (all sortable — see GROUP_SORT_COLUMNS
+  // in query_engine.py). Every key here except rowCount is also a TABLE_COLS
+  // key, so the same column-picker Set drives both views.
+  const GROUP_BY_LABELS = {
+    sku: "SKU", product: "Sản phẩm", category: "Danh mục", customer: "Khách hàng",
+    status: "Trạng thái", warehouseType: "Phân loại kho", itemGroup: "Phân loại mục",
+    productType: "Phân loại sản phẩm", orderId: "Mã đơn hàng",
+  };
+  const GROUP_AGG_COLS = [
+    { key: "rowCount", label: "Số dòng", fmt: v => Number(v).toLocaleString("vi-VN") },
+    { key: "quantity", label: "Số lượng", fmt: v => Number(v).toLocaleString("vi-VN") },
+    { key: "returnedQty", label: "SL hoàn trả", fmt: v => Number(v).toLocaleString("vi-VN") },
+    { key: "soLuongThuc", label: "SL thực", fmt: v => Number(v).toLocaleString("vi-VN") },
+    { key: "doanhSo", label: "Doanh số", fmt: v => fmtNumber(v) },
+    { key: "discount", label: "Giảm giá", fmt: v => fmtNumber(v) },
+    { key: "voucher", label: "Voucher", fmt: v => fmtNumber(v) },
+    { key: "platformFee", label: "Phí sàn", fmt: v => fmtNumber(v) },
+    { key: "piship", label: "Phí Piship", fmt: v => fmtNumber(v) },
+    { key: "phiAff", label: "Phí AFF", fmt: v => fmtNumber(v) },
+    { key: "giaVon", label: "Giá vốn", fmt: v => fmtNumber(v) },
+  ];
+
+  function sortArrow(sortKey, currentSort, currentDir) {
+    if (currentSort !== sortKey) return '<span class="sort-arrow">↕</span>';
+    return `<span class="sort-arrow">${currentDir === "desc" ? "▼" : "▲"}</span>`;
+  }
+
+  function wireSortableHeaders(thead) {
+    thead.querySelectorAll("th.sortable").forEach(th => {
+      th.onclick = () => {
+        const key = th.dataset.sort;
+        if (dash.detailSort === key) {
+          dash.detailSortDir = dash.detailSortDir === "desc" ? "asc" : "desc";
+        } else {
+          dash.detailSort = key;
+          dash.detailSortDir = "asc";
+        }
+        dash.detailPage = 1;
+        dash.expandedGroups.clear();
+        fetchAndRenderDetailTable();
+      };
+    });
+  }
+
+  function rerenderDetailTableOnly() {
+    if (!dash.lastDetailResult) return;
+    if (dash.lastDetailGrouped) renderGroupedTable(dash.lastDetailResult);
+    else renderFlatTable(dash.lastDetailResult);
+  }
+
+  function renderFlatTable(result) {
+    dash.lastDetailResult = result;
+    dash.lastDetailGrouped = false;
+    const thead = document.querySelector("#detailTable thead");
+    const tbody = document.querySelector("#detailTable tbody");
+    const cols = TABLE_COLS.filter(c => dash.visibleCols.has(c.key));
+
+    thead.innerHTML = "<tr>" + cols.map(c => {
+      if (!SORTABLE_FLAT_COLUMNS.has(c.key)) return `<th>${escapeHtml(c.label)}</th>`;
+      const activeClass = dash.detailSort === c.key ? " sort-active" : "";
+      return `<th class="sortable${activeClass}" data-sort="${c.key}">${escapeHtml(c.label)}${sortArrow(c.key, dash.detailSort, dash.detailSortDir)}</th>`;
+    }).join("") + "</tr>";
+    wireSortableHeaders(thead);
 
     tbody.innerHTML = result.rows.map(r =>
-      "<tr>" + TABLE_COLS.map(c => {
+      "<tr>" + cols.map(c => {
         const v = r[c.key];
         return `<td>${v == null || v === "" ? "" : (c.fmt ? c.fmt(v) : escapeHtml(v))}</td>`;
       }).join("") + "</tr>"
-    ).join("") || `<tr><td colspan="${TABLE_COLS.length}" class="muted" style="padding:20px;">Không có dữ liệu</td></tr>`;
+    ).join("") || `<tr><td colspan="${cols.length}" class="muted" style="padding:20px;">Không có dữ liệu</td></tr>`;
 
     const maxPage = Math.max(1, Math.ceil(result.total / result.pageSize));
-    el("pageInfo").textContent = `Trang ${result.page} / ${maxPage} (${result.total.toLocaleString("vi-VN")} dòng)`;
+    el("detailPageInfo").textContent = `Trang ${result.page} / ${maxPage} (${result.total.toLocaleString("vi-VN")} dòng)`;
+  }
+
+  function renderGroupedTable(result) {
+    dash.lastDetailResult = result;
+    dash.lastDetailGrouped = true;
+    const thead = document.querySelector("#detailTable thead");
+    const tbody = document.querySelector("#detailTable tbody");
+    const groupLabel = GROUP_BY_LABELS[dash.detailGroupBy] || "Nhóm";
+    // rowCount is always shown (it's structural, not a TABLE_COLS entry) —
+    // every other aggregate column is gated by the same column picker Set
+    // used by the flat view, since their keys coincide.
+    const cols = GROUP_AGG_COLS.filter(c => c.key === "rowCount" || dash.visibleCols.has(c.key));
+
+    const groupTh = (() => {
+      const activeClass = dash.detailSort === "groupValue" ? " sort-active" : "";
+      return `<th class="sortable${activeClass}" data-sort="groupValue">${escapeHtml(groupLabel)}${sortArrow("groupValue", dash.detailSort, dash.detailSortDir)}</th>`;
+    })();
+    thead.innerHTML = "<tr>" + groupTh + cols.map(c => {
+      const activeClass = dash.detailSort === c.key ? " sort-active" : "";
+      return `<th class="sortable${activeClass}" data-sort="${c.key}">${escapeHtml(c.label)}${sortArrow(c.key, dash.detailSort, dash.detailSortDir)}</th>`;
+    }).join("") + "</tr>";
+    wireSortableHeaders(thead);
+
+    if (!result.rows.length) {
+      tbody.innerHTML = `<tr><td colspan="${cols.length + 1}" class="muted" style="padding:20px;">Không có dữ liệu</td></tr>`;
+    } else {
+      tbody.innerHTML = result.rows.map(r => renderGroupRowHtml(r, cols)).join("");
+      wireGroupRowInteractions(tbody);
+    }
+
+    const maxPage = Math.max(1, Math.ceil(result.total / result.pageSize));
+    el("detailPageInfo").textContent = `Trang ${result.page} / ${maxPage} (${result.total.toLocaleString("vi-VN")} nhóm)`;
+  }
+
+  function renderGroupRowHtml(r, cols) {
+    const key = String(r.groupValue ?? "");
+    const expanded = dash.expandedGroups.has(key);
+    const chevron = expanded ? "▼" : "▶";
+    const label = r.groupValue == null || r.groupValue === "" ? "(Trống)" : r.groupValue;
+    let html = `<tr class="group-row" data-group-value="${escapeHtml(key)}">` +
+      `<td><span class="group-chevron">${chevron}</span>${escapeHtml(label)}</td>` +
+      cols.map(c => `<td>${c.fmt(r[c.key])}</td>`).join("") +
+      `</tr>`;
+    if (expanded) html += renderGroupDetailRowsHtml(key, cols.length + 1);
+    return html;
+  }
+
+  // The drill-down uses its own nested <table> inside one wide <td>, rather
+  // than trying to align full detail columns under the grouped-aggregate
+  // header row — the two column sets don't match, so sharing one <table>'s
+  // column grid would misrender.
+  function renderGroupDetailRowsHtml(groupValue, colspan) {
+    const state = dash.expandedGroups.get(groupValue);
+    if (!state) return "";
+    if (state.loading) {
+      return `<tr class="group-detail-row"><td colspan="${colspan}" class="muted" style="padding:12px;">Đang tải...</td></tr>`;
+    }
+    const flatCols = TABLE_COLS.filter(c => dash.visibleCols.has(c.key));
+    const rowsHtml = state.rows.map(row =>
+      "<tr>" + flatCols.map(c => {
+        const v = row[c.key];
+        return `<td>${v == null || v === "" ? "" : (c.fmt ? c.fmt(v) : escapeHtml(v))}</td>`;
+      }).join("") + "</tr>"
+    ).join("");
+    const remaining = state.total - state.rows.length;
+    const moreHtml = remaining > 0
+      ? `<button class="btn btn-ghost btn-sm group-load-more" data-group-value="${escapeHtml(groupValue)}">Tải thêm (còn ${remaining.toLocaleString("vi-VN")})</button>`
+      : "";
+    return `<tr class="group-detail-row"><td colspan="${colspan}">
+        <div class="table-scroll" style="max-height:260px;">
+          <table><thead><tr>${flatCols.map(c => `<th>${escapeHtml(c.label)}</th>`).join("")}</tr></thead>
+          <tbody>${rowsHtml || `<tr><td colspan="${flatCols.length}" class="muted">Không có dữ liệu</td></tr>`}</tbody></table>
+        </div>
+        ${moreHtml}
+      </td></tr>`;
+  }
+
+  function wireGroupRowInteractions(tbody) {
+    tbody.querySelectorAll("tr.group-row").forEach(tr => {
+      tr.onclick = () => toggleGroupExpand(tr.dataset.groupValue);
+    });
+    tbody.querySelectorAll(".group-load-more").forEach(btn => {
+      btn.onclick = e => { e.stopPropagation(); loadMoreGroupDetail(btn.dataset.groupValue); };
+    });
+  }
+
+  async function toggleGroupExpand(groupValue) {
+    if (dash.expandedGroups.has(groupValue)) {
+      dash.expandedGroups.delete(groupValue);
+      rerenderDetailTableOnly();
+      return;
+    }
+    dash.expandedGroups.set(groupValue, { rows: [], total: 0, page: 1, pageSize: 50, loading: true });
+    rerenderDetailTableOnly();
+    await fetchGroupDetailPage(groupValue, 1);
+  }
+
+  async function fetchGroupDetailPage(groupValue, page) {
+    const params = currentFilterParams({
+      search: dash.detailSearch, groupBy: dash.detailGroupBy, groupValue,
+      sort: "date", sort_dir: "asc", page, pageSize: 50,
+    });
+    try {
+      const result = await API.apiJson(`/api/dashboard/rows?${params.toString()}`);
+      const prev = dash.expandedGroups.get(groupValue);
+      if (!prev) return; // collapsed while the request was in flight
+      const rows = page === 1 ? result.rows : [...prev.rows, ...result.rows];
+      dash.expandedGroups.set(groupValue, { rows, total: result.total, page, pageSize: 50, loading: false });
+      rerenderDetailTableOnly();
+    } catch (err) {
+      console.error("Group drill-down fetch failed:", err);
+      dash.expandedGroups.delete(groupValue);
+      rerenderDetailTableOnly();
+    }
+  }
+
+  function loadMoreGroupDetail(groupValue) {
+    const state = dash.expandedGroups.get(groupValue);
+    if (state) fetchGroupDetailPage(groupValue, state.page + 1);
+  }
+
+  async function exportExcel() {
+    const btn = el("btnExportExcel");
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Đang xuất...";
+    try {
+      ensureVisibleCols();
+      const exportCols = dash.detailGroupBy
+        ? ["groupValue", "rowCount", ...GROUP_AGG_COLS.filter(c => c.key !== "rowCount" && dash.visibleCols.has(c.key)).map(c => c.key)]
+        : TABLE_COLS.filter(c => dash.visibleCols.has(c.key)).map(c => c.key);
+      const params = currentFilterParams({
+        search: dash.detailSearch, sort: dash.detailSort, sortDir: dash.detailSortDir,
+        columns: exportCols.join(","),
+      });
+      if (dash.detailGroupBy) params.set("groupBy", dash.detailGroupBy);
+
+      const res = await API.apiFetch(`/api/dashboard/export?${params.toString()}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Lỗi ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "du-lieu-chi-tiet.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert("Lỗi xuất Excel: " + err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalText;
+    }
   }
 
   /* ================= Auth / login ================= */

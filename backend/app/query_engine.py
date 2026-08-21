@@ -29,6 +29,27 @@ ALLOWED_SORT_COLUMNS = {
     "quantity", "doanhSo", "trangThai",
 }
 
+# Allow-list mapping the Detail-table's "Group theo" dropdown keys to their
+# actual orders_working column — also reused for the group-row drill-down
+# filter (group_by/group_value on run_rows_query) and for the export
+# endpoint. Never interpolate a client-supplied column name directly; always
+# go through this dict first.
+GROUP_BY_COLUMNS = {
+    "sku": "sku", "product": "product", "category": "category",
+    "customer": "customer", "status": "trangThai",
+    "warehouseType": "phanLoaiKho", "itemGroup": "phanLoaiMuc",
+    "productType": "phanLoaiSp", "orderId": "orderId",
+}
+
+# Sortable aggregate columns for run_grouped_rows_query's result set — same
+# whitelist-not-parameterize pattern as ALLOWED_SORT_COLUMNS.
+GROUP_SORT_COLUMNS = {
+    "groupValue": "group_value", "rowCount": "row_count", "quantity": "quantity",
+    "returnedQty": "returned_qty", "soLuongThuc": "so_luong_thuc", "doanhSo": "doanh_so",
+    "discount": "discount", "voucher": "voucher", "platformFee": "platform_fee",
+    "piship": "piship", "phiAff": "phi_aff", "giaVon": "gia_von",
+}
+
 GMV_STATUSES_SQL = "('Hoàn thành', 'Đang giao', 'Hoàn 1 phần')"
 
 EMPTY_SUMMARY = {
@@ -391,6 +412,7 @@ def run_rows_query(
     search=None, sort="date", sort_dir="asc", page=1, page_size=15,
     cashflow_source=None, combo_source=None, master_source=None,
     warehouse_type=None, item_group=None, product_type=None, sku=None,
+    group_by=None, group_value=None,
 ) -> dict:
     page = max(1, page)
     if _is_empty_source(parquet_source):
@@ -403,6 +425,14 @@ def run_rows_query(
         )
         available = _available_columns(con, parquet_source)
         _build_orders_working(con, parquet_source, available, combo_source, cashflow_source, master_source)
+
+        # Drill-down request from a group row in the Detail-table's grouped
+        # view (see run_grouped_rows_query) — narrows to exactly that
+        # group's underlying rows. group_by is checked against the same
+        # allow-list used to build the GROUP BY itself.
+        if group_by and group_by in GROUP_BY_COLUMNS and group_value is not None:
+            where_sql += f' AND "{GROUP_BY_COLUMNS[group_by]}" = ?'
+            params.append(group_value)
 
         if search:
             where_sql += (
@@ -438,5 +468,157 @@ def run_rows_query(
         rows = [dict(zip(col_names, r)) for r in cursor.fetchall()]
 
         return {"rows": rows, "total": total, "page": page, "pageSize": page_size}
+    finally:
+        con.close()
+
+
+def _grouped_agg_sql(where_sql: str, group_col: str) -> str:
+    return f"""
+        SELECT
+          "{group_col}" AS group_value,
+          COUNT(*) AS row_count,
+          COALESCE(SUM("quantity"), 0) AS quantity,
+          COALESCE(SUM("returnedQty"), 0) AS returned_qty,
+          COALESCE(SUM("soLuongThuc"), 0) AS so_luong_thuc,
+          COALESCE(SUM("doanhSo"), 0) AS doanh_so,
+          COALESCE(SUM("discount"), 0) AS discount,
+          COALESCE(SUM("voucher"), 0) AS voucher,
+          COALESCE(SUM("platformFee"), 0) AS platform_fee,
+          COALESCE(SUM("piship"), 0) AS piship,
+          COALESCE(SUM("phiAff"), 0) AS phi_aff,
+          COALESCE(SUM("giaVon"), 0) AS gia_von
+        FROM orders_working WHERE {where_sql}
+        GROUP BY "{group_col}"
+    """
+
+
+def run_grouped_rows_query(
+    parquet_source,
+    from_date=None, to_date=None, category=None, status=None,
+    search=None, group_by="sku", sort="doanhSo", sort_dir="desc", page=1, page_size=15,
+    cashflow_source=None, combo_source=None, master_source=None,
+    warehouse_type=None, item_group=None, product_type=None, sku=None,
+) -> dict:
+    """Server-side group-by-column aggregation over orders_working — the
+    "Group theo" mode of the Detail-table sub-tab. Never loads the raw row
+    set into Python; DuckDB does the GROUP BY over however many hundreds of
+    thousands of rows match the filters, and only the (much smaller) group
+    result page comes back.
+    """
+    page = max(1, page)
+    if _is_empty_source(parquet_source) or group_by not in GROUP_BY_COLUMNS:
+        return {"rows": [], "total": 0, "page": page, "pageSize": page_size}
+
+    group_col = GROUP_BY_COLUMNS[group_by]
+
+    con = _connect()
+    try:
+        where_sql, params = _where_clause(
+            from_date, to_date, category, status, warehouse_type, item_group, product_type, sku,
+        )
+        available = _available_columns(con, parquet_source)
+        _build_orders_working(con, parquet_source, available, combo_source, cashflow_source, master_source)
+
+        if search:
+            where_sql += (
+                ' AND (lower("product") LIKE ? OR lower("category") LIKE ? OR '
+                'lower("customer") LIKE ? OR lower("orderId") LIKE ? OR '
+                'lower("sku") LIKE ? OR lower("skuVariant") LIKE ?)'
+            )
+            like = f"%{search.lower()}%"
+            params.extend([like] * 6)
+
+        total = con.execute(
+            f'SELECT COUNT(DISTINCT "{group_col}") FROM orders_working WHERE {where_sql}', params
+        ).fetchone()[0]
+
+        sort_col = GROUP_SORT_COLUMNS.get(sort, "doanh_so")
+        sort_dir_sql = "DESC" if str(sort_dir).lower() == "desc" else "ASC"
+        offset = (page - 1) * page_size
+
+        rows_sql = f"""
+            {_grouped_agg_sql(where_sql, group_col)}
+            ORDER BY {sort_col} {sort_dir_sql}
+            LIMIT ? OFFSET ?
+        """
+        cursor = con.execute(rows_sql, [*params, page_size, offset])
+        col_names = [d[0] for d in cursor.description]
+        raw_rows = [dict(zip(col_names, r)) for r in cursor.fetchall()]
+        rows = [
+            {
+                "groupValue": r["group_value"], "rowCount": r["row_count"],
+                "quantity": r["quantity"], "returnedQty": r["returned_qty"],
+                "soLuongThuc": r["so_luong_thuc"], "doanhSo": r["doanh_so"],
+                "discount": r["discount"], "voucher": r["voucher"],
+                "platformFee": r["platform_fee"], "piship": r["piship"],
+                "phiAff": r["phi_aff"], "giaVon": r["gia_von"],
+            }
+            for r in raw_rows
+        ]
+
+        return {"rows": rows, "total": total, "page": page, "pageSize": page_size}
+    finally:
+        con.close()
+
+
+def run_export_query(
+    parquet_source,
+    from_date=None, to_date=None, category=None, status=None,
+    search=None, group_by=None, sort=None, sort_dir="asc",
+    cashflow_source=None, combo_source=None, master_source=None,
+    warehouse_type=None, item_group=None, product_type=None, sku=None,
+) -> list[dict]:
+    """Pulls the ENTIRE result set matching the current filters (no LIMIT/
+    OFFSET) for the Excel export — grouped aggregate rows when group_by is
+    set, otherwise every detail row. A single columnar DuckDB scan, not a
+    per-page loop, so this stays fast even at hundreds of thousands of rows.
+    """
+    if _is_empty_source(parquet_source):
+        return []
+
+    con = _connect()
+    try:
+        where_sql, params = _where_clause(
+            from_date, to_date, category, status, warehouse_type, item_group, product_type, sku,
+        )
+        available = _available_columns(con, parquet_source)
+        _build_orders_working(con, parquet_source, available, combo_source, cashflow_source, master_source)
+
+        if search:
+            where_sql += (
+                ' AND (lower("product") LIKE ? OR lower("category") LIKE ? OR '
+                'lower("customer") LIKE ? OR lower("orderId") LIKE ? OR '
+                'lower("sku") LIKE ? OR lower("skuVariant") LIKE ?)'
+            )
+            like = f"%{search.lower()}%"
+            params.extend([like] * 6)
+
+        if group_by and group_by in GROUP_BY_COLUMNS:
+            group_col = GROUP_BY_COLUMNS[group_by]
+            sort_col = GROUP_SORT_COLUMNS.get(sort, "doanh_so")
+            sort_dir_sql = "DESC" if str(sort_dir).lower() == "desc" else "ASC"
+            sql = f"{_grouped_agg_sql(where_sql, group_col)} ORDER BY {sort_col} {sort_dir_sql}"
+            cursor = con.execute(sql, params)
+            col_names = [d[0] for d in cursor.description]
+            raw_rows = [dict(zip(col_names, r)) for r in cursor.fetchall()]
+            return [
+                {
+                    "groupValue": r["group_value"], "rowCount": r["row_count"],
+                    "quantity": r["quantity"], "returnedQty": r["returned_qty"],
+                    "soLuongThuc": r["so_luong_thuc"], "doanhSo": r["doanh_so"],
+                    "discount": r["discount"], "voucher": r["voucher"],
+                    "platformFee": r["platform_fee"], "piship": r["piship"],
+                    "phiAff": r["phi_aff"], "giaVon": r["gia_von"],
+                }
+                for r in raw_rows
+            ]
+
+        sort_col = sort if sort in ALLOWED_SORT_COLUMNS else "date"
+        sort_dir_sql = "DESC" if str(sort_dir).lower() == "desc" else "ASC"
+        cols_sql = ", ".join(f'"{c}"' for c in DETAIL_COLUMNS)
+        sql = f'SELECT {cols_sql} FROM orders_working WHERE {where_sql} ORDER BY "{sort_col}" {sort_dir_sql}'
+        cursor = con.execute(sql, params)
+        col_names = [d[0] for d in cursor.description]
+        return [dict(zip(col_names, r)) for r in cursor.fetchall()]
     finally:
         con.close()
