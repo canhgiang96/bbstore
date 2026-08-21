@@ -32,6 +32,66 @@
     return v ?? "";
   }
 
+  /* ---- Date-range helpers for the Dashboard's time-filter popover ---- */
+  function pad2(n) { return String(n).padStart(2, "0"); }
+  function toIsoDate(d) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
+  function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate() + n); return r; }
+  function formatVnDate(iso) {
+    if (!iso) return "";
+    const [y, m, d] = iso.split("-");
+    return `${d}/${m}/${y}`;
+  }
+
+  // "Current period" presets (today/thisMonth/thisQuarter/thisYear) run
+  // through *today* (a live dashboard shouldn't imply data exists for
+  // future days); "past period" presets are fixed, fully-elapsed ranges.
+  function computePresetRange(key) {
+    const today = new Date();
+    const y = today.getFullYear();
+    const m = today.getMonth(); // 0-indexed
+    switch (key) {
+      case "today": return { from: toIsoDate(today), to: toIsoDate(today) };
+      case "yesterday": { const d = addDays(today, -1); return { from: toIsoDate(d), to: toIsoDate(d) }; }
+      case "last7": return { from: toIsoDate(addDays(today, -6)), to: toIsoDate(today) };
+      case "last30": return { from: toIsoDate(addDays(today, -29)), to: toIsoDate(today) };
+      case "thisMonth": return { from: toIsoDate(new Date(y, m, 1)), to: toIsoDate(today) };
+      case "lastMonth": return { from: toIsoDate(new Date(y, m - 1, 1)), to: toIsoDate(new Date(y, m, 0)) };
+      case "thisQuarter": {
+        const qStart = Math.floor(m / 3) * 3;
+        return { from: toIsoDate(new Date(y, qStart, 1)), to: toIsoDate(today) };
+      }
+      case "lastQuarter": {
+        const qStart = Math.floor(m / 3) * 3 - 3;
+        return { from: toIsoDate(new Date(y, qStart, 1)), to: toIsoDate(new Date(y, qStart + 3, 0)) };
+      }
+      case "thisYear": return { from: toIsoDate(new Date(y, 0, 1)), to: toIsoDate(today) };
+      case "lastYear": return { from: toIsoDate(new Date(y - 1, 0, 1)), to: toIsoDate(new Date(y - 1, 11, 31)) };
+      default: return null;
+    }
+  }
+
+  function computeMonthRange(monthValue) { // "YYYY-MM" from <input type="month">
+    const [y, m] = monthValue.split("-").map(Number);
+    return { from: toIsoDate(new Date(y, m - 1, 1)), to: toIsoDate(new Date(y, m, 0)) };
+  }
+
+  function computeQuarterRange(quarter, year) {
+    const qStart = (quarter - 1) * 3;
+    return { from: toIsoDate(new Date(year, qStart, 1)), to: toIsoDate(new Date(year, qStart + 3, 0)) };
+  }
+
+  function computeYearRange(year) {
+    return { from: toIsoDate(new Date(year, 0, 1)), to: toIsoDate(new Date(year, 11, 31)) };
+  }
+
+  const TIME_PRESET_LABELS = {
+    "": "Tất cả thời gian", today: "Hôm nay", yesterday: "Hôm qua",
+    last7: "7 ngày trước", last30: "30 ngày trước",
+    thisMonth: "Tháng này", lastMonth: "Tháng trước",
+    thisQuarter: "Quý này", lastQuarter: "Quý trước",
+    thisYear: "Năm nay", lastYear: "Năm trước",
+  };
+
   // Keys prefixed with "__" are internal bookkeeping (which file a row came
   // from) and never shown as a data column or edited.
   function inferColumns(rows) {
@@ -769,6 +829,9 @@
     reportsCount: 0,
     readyCount: 0,
     subtab: "overview",
+    timeFrom: "", // ISO "YYYY-MM-DD" — "" means no lower bound
+    timeTo: "",
+    timeLabel: "Tất cả thời gian", // the time-filter popover's summary text
     detailSearch: "",
     detailGroupByLevels: [], // ordered list of GROUP_BY_COLUMNS keys — [] means "Không group"; index = hierarchy level
     detailSort: "date",
@@ -835,11 +898,9 @@
 
   function currentFilterParams(extra) {
     const params = new URLSearchParams();
-    const from = el("filterFrom").value;
-    const to = el("filterTo").value;
     const sku = el("filterSku").value.trim();
-    if (from) params.set("from", from);
-    if (to) params.set("to", to);
+    if (dash.timeFrom) params.set("from", dash.timeFrom);
+    if (dash.timeTo) params.set("to", dash.timeTo);
     // Multi-select — each checked value becomes its own "status="/etc entry
     // (append, not set) so the backend can match "any of these".
     dash.selectedStatus.forEach(v => params.append("status", v));
@@ -907,6 +968,80 @@
 
   function updateMultiSelectSummary(summaryId, selectedSet) {
     el(summaryId).textContent = selectedSet.size === 0 ? "Tất cả" : `${selectedSet.size} đã chọn`;
+  }
+
+  // Sets the active time range + popover summary text and closes the
+  // popover — does NOT re-fetch on its own, matching every other filter in
+  // this bar (applies only when "🔍 Tìm kiếm" is clicked). presetKey
+  // highlights the matching preset button; omit it for a custom
+  // day/month/quarter/year selection (none of the preset buttons apply).
+  function setTimeFilter(from, to, label, presetKey) {
+    dash.timeFrom = from;
+    dash.timeTo = to;
+    dash.timeLabel = label;
+    el("timeFilterSummary").textContent = label;
+    el("timeFilterList").querySelectorAll(".time-preset-btn").forEach(btn => {
+      btn.classList.toggle("active", presetKey !== undefined && btn.dataset.preset === presetKey);
+    });
+    el("timeFilterPicker").open = false;
+  }
+
+  function wireTimeFilter() {
+    const currentYear = new Date().getFullYear();
+    const yearOptionsHtml = Array.from({ length: 6 }, (_, i) => currentYear - i)
+      .map(y => `<option value="${y}">${y}</option>`).join("");
+    el("customQuarterYear").innerHTML = yearOptionsHtml;
+    el("customYear").innerHTML = yearOptionsHtml;
+    el("timeFilterList").querySelector('.time-preset-btn[data-preset=""]').classList.add("active");
+
+    el("timeFilterList").querySelectorAll(".time-preset-btn").forEach(btn => {
+      btn.onclick = () => {
+        const key = btn.dataset.preset;
+        if (key === "custom") {
+          el("timeCustomPanel").hidden = !el("timeCustomPanel").hidden;
+          return;
+        }
+        const range = key ? computePresetRange(key) : { from: "", to: "" };
+        setTimeFilter(range.from, range.to, TIME_PRESET_LABELS[key], key);
+      };
+    });
+
+    el("timeFilterList").querySelectorAll(".time-custom-tab").forEach(tab => {
+      tab.onclick = () => {
+        el("timeFilterList").querySelectorAll(".time-custom-tab").forEach(t => t.classList.remove("active"));
+        tab.classList.add("active");
+        const target = tab.dataset.customTab;
+        el("timeFilterList").querySelectorAll(".time-custom-body").forEach(body => {
+          body.hidden = body.dataset.customBody !== target;
+        });
+      };
+    });
+
+    el("btnApplyCustomDay").onclick = () => {
+      const from = el("customFrom").value;
+      const to = el("customTo").value;
+      if (!from && !to) return;
+      const label = from && to ? `${formatVnDate(from)} - ${formatVnDate(to)}` : "Tùy chọn";
+      setTimeFilter(from, to, label);
+    };
+    el("btnApplyCustomMonth").onclick = () => {
+      const monthValue = el("customMonth").value;
+      if (!monthValue) return;
+      const range = computeMonthRange(monthValue);
+      const [y, m] = monthValue.split("-");
+      setTimeFilter(range.from, range.to, `Tháng ${Number(m)}/${y}`);
+    };
+    el("btnApplyCustomQuarter").onclick = () => {
+      const q = Number(el("customQuarterQ").value);
+      const y = Number(el("customQuarterYear").value);
+      const range = computeQuarterRange(q, y);
+      setTimeFilter(range.from, range.to, `Quý ${q}/${y}`);
+    };
+    el("btnApplyCustomYear").onclick = () => {
+      const y = Number(el("customYear").value);
+      const range = computeYearRange(y);
+      setTimeFilter(range.from, range.to, `Năm ${y}`);
+    };
   }
 
   function renderColumnPicker() {
@@ -980,8 +1115,10 @@
   function initDashboardFilters() {
     el("btnApplyFilter").onclick = () => applyFiltersAndRender();
     el("btnClearFilter").onclick = () => {
-      el("filterFrom").value = "";
-      el("filterTo").value = "";
+      setTimeFilter("", "", TIME_PRESET_LABELS[""], "");
+      el("customFrom").value = "";
+      el("customTo").value = "";
+      el("timeCustomPanel").hidden = true;
       dash.selectedStatus.clear();
       dash.selectedWarehouseType.clear();
       dash.selectedItemGroup.clear();
@@ -1002,6 +1139,7 @@
     el("detailNext").onclick = () => { dash.detailPage++; clearGroupState(); fetchAndRenderDetailTable(); };
     el("btnExportExcel").onclick = () => exportExcel();
     wireSubtabs();
+    wireTimeFilter();
     ensureVisibleCols();
     renderColumnPicker();
     renderGroupByPicker();

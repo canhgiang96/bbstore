@@ -71,13 +71,76 @@
       <p class="muted" id="dashboardSourceNote" style="margin: 0 0 14px;"></p>
 
       <div class="filters card">
-        <div class="filter-item">
-          <label>Từ ngày</label>
-          <input type="date" id="filterFrom" />
-        </div>
-        <div class="filter-item">
-          <label>Đến ngày</label>
-          <input type="date" id="filterTo" />
+        <div class="filter-item filter-grow">
+          <label>Thời gian</label>
+          <details class="multi-select" id="timeFilterPicker">
+            <summary class="multi-select-summary" id="timeFilterSummary">Tất cả thời gian</summary>
+            <div class="multi-select-list time-filter-panel" id="timeFilterList">
+              <div class="time-preset-list">
+                <button type="button" class="time-preset-btn" data-preset="">Tất cả thời gian</button>
+                <button type="button" class="time-preset-btn" data-preset="today">Hôm nay</button>
+                <button type="button" class="time-preset-btn" data-preset="yesterday">Hôm qua</button>
+                <button type="button" class="time-preset-btn" data-preset="last7">7 ngày trước</button>
+                <button type="button" class="time-preset-btn" data-preset="last30">30 ngày trước</button>
+                <button type="button" class="time-preset-btn" data-preset="thisMonth">Tháng này</button>
+                <button type="button" class="time-preset-btn" data-preset="lastMonth">Tháng trước</button>
+                <button type="button" class="time-preset-btn" data-preset="thisQuarter">Quý này</button>
+                <button type="button" class="time-preset-btn" data-preset="lastQuarter">Quý trước</button>
+                <button type="button" class="time-preset-btn" data-preset="thisYear">Năm nay</button>
+                <button type="button" class="time-preset-btn" data-preset="lastYear">Năm trước</button>
+                <button type="button" class="time-preset-btn" data-preset="custom">Tùy chọn</button>
+              </div>
+              <div class="time-custom-panel" id="timeCustomPanel" hidden>
+                <div class="time-custom-tabs">
+                  <button type="button" class="time-custom-tab active" data-custom-tab="day">Theo ngày</button>
+                  <button type="button" class="time-custom-tab" data-custom-tab="month">Theo tháng</button>
+                  <button type="button" class="time-custom-tab" data-custom-tab="quarter">Theo quý</button>
+                  <button type="button" class="time-custom-tab" data-custom-tab="year">Theo năm</button>
+                </div>
+                <div class="time-custom-body" data-custom-body="day">
+                  <div class="filter-item">
+                    <label>Từ ngày</label>
+                    <input type="date" id="customFrom" />
+                  </div>
+                  <div class="filter-item">
+                    <label>Đến ngày</label>
+                    <input type="date" id="customTo" />
+                  </div>
+                  <button type="button" class="btn btn-primary btn-sm" id="btnApplyCustomDay">Áp dụng</button>
+                </div>
+                <div class="time-custom-body" data-custom-body="month" hidden>
+                  <div class="filter-item">
+                    <label>Chọn tháng</label>
+                    <input type="month" id="customMonth" />
+                  </div>
+                  <button type="button" class="btn btn-primary btn-sm" id="btnApplyCustomMonth">Áp dụng</button>
+                </div>
+                <div class="time-custom-body" data-custom-body="quarter" hidden>
+                  <div class="filter-item">
+                    <label>Quý</label>
+                    <select id="customQuarterQ">
+                      <option value="1">Quý 1</option>
+                      <option value="2">Quý 2</option>
+                      <option value="3">Quý 3</option>
+                      <option value="4">Quý 4</option>
+                    </select>
+                  </div>
+                  <div class="filter-item">
+                    <label>Năm</label>
+                    <select id="customQuarterYear"></select>
+                  </div>
+                  <button type="button" class="btn btn-primary btn-sm" id="btnApplyCustomQuarter">Áp dụng</button>
+                </div>
+                <div class="time-custom-body" data-custom-body="year" hidden>
+                  <div class="filter-item">
+                    <label>Năm</label>
+                    <select id="customYear"></select>
+                  </div>
+                  <button type="button" class="btn btn-primary btn-sm" id="btnApplyCustomYear">Áp dụng</button>
+                </div>
+              </div>
+            </div>
+          </details>
         </div>
         <div class="filter-item filter-grow">
           <label>Trạng thái</label>
@@ -371,8 +434,8 @@
   </div>
 </div>
 
-<script src="js/db.js?v=22"></script>
-<script src="js/api.js?v=22"></script>
-<script src="js/app.js?v=22"></script>
+<script src="js/db.js?v=23"></script>
+<script src="js/api.js?v=23"></script>
+<script src="js/app.js?v=23"></script>
 </body>
 </html>

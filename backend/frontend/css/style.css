@@ -281,6 +281,25 @@ tbody tr:hover { background: var(--primary-soft); }
   padding: 8px 10px; font-size: 14px; color: var(--text); white-space: nowrap;
 }
 
+/* Time-range filter popover (presets + Tùy chọn sub-tabs) */
+.time-filter-panel { min-width: 300px; max-height: none; }
+.time-preset-list { display: flex; flex-direction: column; gap: 2px; }
+.time-preset-btn {
+  background: transparent; border: none; text-align: left; padding: 7px 8px; border-radius: 6px;
+  font-size: 13.5px; color: var(--text); cursor: pointer; font-family: inherit;
+}
+.time-preset-btn:hover, .time-preset-btn.active { background: var(--primary-soft); }
+.time-custom-panel { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 10px; }
+.time-custom-tabs { display: flex; gap: 4px; margin-bottom: 10px; flex-wrap: wrap; }
+.time-custom-tab {
+  background: transparent; border: 1px solid var(--border); border-radius: 6px; padding: 5px 9px;
+  font-size: 12.5px; font-weight: 600; color: var(--text-muted); cursor: pointer; font-family: inherit;
+}
+.time-custom-tab.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+.time-custom-body { display: flex; flex-direction: column; gap: 10px; }
+.time-custom-body .filter-item select,
+.time-custom-body .filter-item input { width: 100%; }
+
 /* Sortable detail-table headers */
 th.sortable { cursor: pointer; user-select: none; }
 th.sortable:hover { background: var(--primary-soft); }
