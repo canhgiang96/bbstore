@@ -58,9 +58,37 @@ def test_summary_kpis_match_expected(parquet_path):
     assert kpis["gmv"] == 360000
     assert kpis["huyChuaXK"] == 150000
     assert kpis["huySauXK"] == 200000
-    assert kpis["hoan"] == 230000
+    # Doanh số hoàn = Giá gốc x SL hoàn trả (not the full line's doanhSo) —
+    # O3: 20000*4=80000, O4: 30000*2=60000 -> 140000. This is intentionally
+    # NOT part of the "4 KPIs sum to Doanh số" reconciliation any more —
+    # the user confirmed dropping that invariant for this KPI.
+    assert kpis["hoan"] == 140000
     assert kpis["rowCount"] == 6
-    assert kpis["gmv"] + kpis["huyChuaXK"] + kpis["huySauXK"] + kpis["hoan"] == kpis["doanhSo"]
+
+
+def test_summary_hoan_counts_returned_qty_regardless_of_final_status():
+    # "Hủy sau XK" wins priority over the return branches in derive_order_status
+    # when the order was ALSO cancelled — but Doanh số hoàn (Giá gốc x SL hoàn
+    # trả) must still count that row's returned units, since it's not scoped
+    # to trangThai at all.
+    wb = Workbook()
+    ws = wb.active
+    ws.append(HEADERS)
+    ws.append(["O1", "2026-02-01 00:01", "Đã hủy", "Giao hàng thất bại", "A100-1", "SP A", "Áo", 100000, 2, 1])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    parquet_bytes, row_count, _ = excel_to_parquet(buf)
+    assert row_count == 1
+
+    fd, path = tempfile.mkstemp(suffix=".parquet")
+    with os.fdopen(fd, "wb") as f:
+        f.write(parquet_bytes)
+    try:
+        result = run_summary_query(path)
+        assert result["kpis"]["hoan"] == 100000  # 100000 * 1
+    finally:
+        os.remove(path)
 
 
 def test_summary_facets_unaffected_by_status_filter(parquet_path):

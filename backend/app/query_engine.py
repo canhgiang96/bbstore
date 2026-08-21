@@ -28,7 +28,6 @@ ALLOWED_SORT_COLUMNS = {
 }
 
 GMV_STATUSES_SQL = "('Hoàn thành', 'Đang giao')"
-HOAN_STATUSES_SQL = "('Hoàn hàng', 'Hoàn 1 phần')"
 
 EMPTY_SUMMARY = {
     "kpis": {"doanhSo": 0, "gmv": 0, "huyChuaXK": 0, "huySauXK": 0, "hoan": 0, "discount": 0, "voucher": 0, "nmv": 0, "rowCount": 0},
@@ -126,7 +125,7 @@ def run_summary_query(parquet_source, from_date=None, to_date=None, category=Non
               COALESCE(SUM(CASE WHEN "trangThai" IN {GMV_STATUSES_SQL} THEN "doanhSo" ELSE 0 END), 0) AS gmv,
               COALESCE(SUM(CASE WHEN "trangThai" = 'Hủy chưa XK' THEN "doanhSo" ELSE 0 END), 0) AS huy_chua_xk,
               COALESCE(SUM(CASE WHEN "trangThai" = 'Hủy sau XK' THEN "doanhSo" ELSE 0 END), 0) AS huy_sau_xk,
-              COALESCE(SUM(CASE WHEN "trangThai" IN {HOAN_STATUSES_SQL} THEN "doanhSo" ELSE 0 END), 0) AS hoan,
+              COALESCE(SUM("originalPrice" * "returnedQty"), 0) AS hoan,
               COALESCE(SUM(CASE WHEN "trangThai" IN {GMV_STATUSES_SQL} THEN {discount_col} ELSE 0 END), 0) AS discount,
               COALESCE(SUM(CASE WHEN "trangThai" IN {GMV_STATUSES_SQL} THEN {voucher_col} ELSE 0 END), 0) AS voucher,
               COUNT(*) AS row_count
