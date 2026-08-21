@@ -14,7 +14,7 @@ Trang web tổng hợp dữ liệu kinh doanh từ nhiều file Excel (đơn hà
   - `Doanh số` = Giá gốc × Số lượng
   - `Số lượng thực` = Số lượng − Số lượng sản phẩm được hoàn trả
   - `Trạng thái` (suy ra theo thứ tự ưu tiên): **Hủy sau XK** (trạng thái chứa "hủy" + lý do hủy chứa "Giao hàng thất bại") → **Hủy chưa XK** (chứa "hủy", lý do khác) → **Hoàn hàng** (Số lượng thực = 0) → **Hoàn 1 phần** (có hoàn trả nhưng Số lượng thực > 0) → **Hoàn thành** (trạng thái đơn hàng = Hoàn thành) → còn lại là **Đang giao**
-- 5 chỉ số KPI: Doanh số, Doanh số thuần (Hoàn thành + Đang giao), Doanh số hủy chưa XK, Doanh số hủy sau XK, Doanh số hoàn (Hoàn hàng + Hoàn 1 phần) — 4 mục sau cộng lại đúng bằng Doanh số tổng
+- 5 chỉ số KPI: Doanh số, GMV (Hoàn thành + Đang giao), Doanh số hủy chưa XK, Doanh số hủy sau XK, Doanh số hoàn (Hoàn hàng + Hoàn 1 phần) — 4 mục sau cộng lại đúng bằng Doanh số tổng
 - Bộ lọc theo khoảng thời gian, danh mục, và trạng thái (6 giá trị suy ra ở trên)
 - 4 biểu đồ theo Doanh số, bảng dữ liệu chi tiết có tìm kiếm và phân trang
 - Nút "Dùng dữ liệu mẫu" để xem thử ngay không cần file
