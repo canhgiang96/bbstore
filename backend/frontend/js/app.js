@@ -2,19 +2,6 @@
   "use strict";
 
   /* ================= Utils ================= */
-  function stripDiacritics(str) {
-    return String(str)
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/đ/gi, "d")
-      .toLowerCase()
-      .trim();
-  }
-
-  function normalizeHeader(h) {
-    return stripDiacritics(h).replace(/[^a-z0-9]+/g, " ").trim();
-  }
-
   function fmtNumber(n) {
     if (n == null || !isFinite(n)) return "–";
     return Math.round(n).toLocaleString("vi-VN");
@@ -24,12 +11,6 @@
 
   function escapeHtml(s) {
     return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  }
-
-  function formatCell(v) {
-    if (v instanceof Date) return v.toLocaleDateString("vi-VN");
-    if (typeof v === "number") return v.toLocaleString("vi-VN");
-    return v ?? "";
   }
 
   /* ---- Date-range helpers for the Dashboard's time-filter popover ---- */
@@ -92,30 +73,6 @@
     thisYear: "Năm nay", lastYear: "Năm trước",
   };
 
-  // Keys prefixed with "__" are internal bookkeeping (which file a row came
-  // from) and never shown as a data column or edited.
-  function inferColumns(rows) {
-    const seen = [];
-    const set = new Set();
-    rows.slice(0, 50).forEach(({ value }) => Object.keys(value).forEach(k => {
-      if (k.startsWith("__")) return;
-      if (!set.has(k)) { set.add(k); seen.push(k); }
-    }));
-    return seen;
-  }
-
-  const UNTAGGED_BATCH_LABEL = "(Thêm thủ công / không rõ nguồn)";
-  function batchLabel(row) { return row.__sourceFile || UNTAGGED_BATCH_LABEL; }
-
-  /* ================= Store metadata (Điều chỉnh — Orders, Dòng tiền, Combo and Master File are API-backed, not a generic store) ================= */
-  const STORE_META = {
-    adjustments: {
-      label: "Điều chỉnh doanh thu",
-      headers: ["Mã giao dịch", "Ngày hoàn thành điều chỉnh đơn hàng", "Loại điều chỉnh | Mô tả", "Lý do điều chỉnh", "Số tiền điều chỉnh", "Mã đơn hàng liên quan", "Ngày hoàn thành thanh toán"],
-      primaryKeyHeader: null,
-    },
-  };
-
   /* ================= Tabs ================= */
   function initTabs() {
     // Scoped to #mainTabs — the Dashboard's own sub-tab nav (#dashboardSubtabs,
@@ -130,262 +87,6 @@
         el("panel-" + btn.dataset.tab).hidden = false;
       });
     });
-  }
-
-  /* ================= Generic data manager (Master/Điều chỉnh) ================= */
-  const managerState = {};
-
-  function setupDataManager(storeKey) {
-    const meta = STORE_META[storeKey];
-    managerState[storeKey] = { all: [], filtered: [], page: 1, pageSize: 20, search: "", columns: meta.headers || [] };
-
-    const panel = el("panel-" + storeKey);
-    panel.innerHTML = `
-      <div class="data-panel-header">
-        <h2>${escapeHtml(meta.label)}</h2>
-        <span class="muted" id="count-${storeKey}"></span>
-      </div>
-      <div class="drop-zone" id="dropzone-${storeKey}">
-        <div class="drop-zone-icon">📁</div>
-        <h2>Kéo thả file Excel/CSV vào đây</h2>
-        <p>hoặc</p>
-        <label class="btn btn-primary" for="file-${storeKey}">Chọn file</label>
-        <input type="file" id="file-${storeKey}" accept=".xlsx,.xls,.csv" hidden />
-        <div class="import-summary" id="importSummary-${storeKey}"></div>
-      </div>
-      <div class="card file-batches" id="fileBatches-${storeKey}" hidden>
-        <h3>Theo file đã tải lên</h3>
-        <div id="fileBatchList-${storeKey}"></div>
-      </div>
-      <div class="data-toolbar">
-        <button class="btn btn-primary btn-sm" id="btnAdd-${storeKey}">+ Thêm dòng</button>
-        <button class="btn btn-danger btn-sm" id="btnClearAll-${storeKey}">Xóa tất cả</button>
-        <div class="spacer"></div>
-        <input type="text" id="search-${storeKey}" placeholder="Tìm kiếm..." />
-      </div>
-      <div class="card table-card">
-        <div class="table-scroll"><table id="table-${storeKey}"><thead></thead><tbody></tbody></table></div>
-        <div class="table-footer">
-          <button class="btn btn-ghost" id="prev-${storeKey}">← Trước</button>
-          <span class="muted" id="pageInfo-${storeKey}"></span>
-          <button class="btn btn-ghost" id="next-${storeKey}">Sau →</button>
-        </div>
-      </div>
-    `;
-
-    wireUpload(storeKey, meta);
-
-    el("btnAdd-" + storeKey).onclick = () => openRowModal(storeKey, null);
-    el("btnClearAll-" + storeKey).onclick = async () => {
-      if (!confirm(`Xóa toàn bộ dữ liệu "${meta.label}"? Hành động này không thể hoàn tác.`)) return;
-      await DB.clear(storeKey);
-      await refreshDataManager(storeKey);
-    };
-    el("search-" + storeKey).oninput = e => {
-      managerState[storeKey].search = e.target.value;
-      applyManagerSearch(storeKey);
-    };
-    el("prev-" + storeKey).onclick = () => {
-      const st = managerState[storeKey];
-      if (st.page > 1) { st.page--; renderManagerTable(storeKey); }
-    };
-    el("next-" + storeKey).onclick = () => {
-      const st = managerState[storeKey];
-      const maxPage = Math.max(1, Math.ceil(st.filtered.length / st.pageSize));
-      if (st.page < maxPage) { st.page++; renderManagerTable(storeKey); }
-    };
-
-    refreshDataManager(storeKey);
-  }
-
-  function wireUpload(storeKey, meta) {
-    const dz = el("dropzone-" + storeKey);
-    const input = el("file-" + storeKey);
-    ["dragenter", "dragover"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add("dragover"); }));
-    ["dragleave", "drop"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove("dragover"); }));
-    dz.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) handleUpload(storeKey, meta, f); });
-    input.addEventListener("change", e => {
-      const f = e.target.files[0];
-      if (f) handleUpload(storeKey, meta, f);
-      input.value = "";
-    });
-  }
-
-  function normalizeRowHeaders(row, canonicalHeaders) {
-    const out = {};
-    for (const [rawKey, val] of Object.entries(row)) {
-      const match = canonicalHeaders.find(c => normalizeHeader(c) === normalizeHeader(rawKey));
-      out[match || rawKey] = val;
-    }
-    canonicalHeaders.forEach(c => { if (!(c in out)) out[c] = ""; });
-    return out;
-  }
-
-  function handleUpload(storeKey, meta, file) {
-    const reader = new FileReader();
-    reader.onload = async e => {
-      try {
-        const data = new Uint8Array(e.target.result);
-        const wb = XLSX.read(data, { type: "array", cellDates: true });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        let rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
-        if (meta.headers) rows = rows.map(r => normalizeRowHeaders(r, meta.headers));
-        const uploadedAt = new Date().toISOString();
-        rows = rows.map(r => ({ ...r, __sourceFile: file.name, __uploadedAt: uploadedAt }));
-        const n = await DB.bulkPut(storeKey, rows);
-        showImportSummary(storeKey, `Đã nhập ${n.toLocaleString("vi-VN")} dòng từ "${file.name}" (sheet: ${wb.SheetNames[0]}).`, true);
-        await refreshDataManager(storeKey);
-      } catch (err) {
-        showImportSummary(storeKey, "Lỗi đọc file: " + err.message, false);
-      }
-    };
-    reader.readAsArrayBuffer(file);
-  }
-
-  function showImportSummary(storeKey, msg, ok) {
-    const box = el("importSummary-" + storeKey);
-    box.textContent = msg;
-    box.className = "import-summary " + (ok ? "ok" : "err");
-  }
-
-  async function refreshDataManager(storeKey) {
-    const meta = STORE_META[storeKey];
-    const rows = await DB.getAllWithKeys(storeKey);
-    const st = managerState[storeKey];
-    st.all = rows;
-    st.columns = meta.headers || inferColumns(rows);
-    el("count-" + storeKey).textContent = `${rows.length.toLocaleString("vi-VN")} dòng`;
-    renderFileBatches(storeKey);
-    applyManagerSearch(storeKey);
-  }
-
-  function renderFileBatches(storeKey) {
-    const st = managerState[storeKey];
-    const groups = new Map(); // label -> { count, uploadedAt }
-    st.all.forEach(({ value }) => {
-      const label = batchLabel(value);
-      if (!groups.has(label)) groups.set(label, { count: 0, uploadedAt: value.__uploadedAt || null });
-      groups.get(label).count++;
-    });
-
-    const box = el("fileBatches-" + storeKey);
-    if (groups.size === 0) { box.hidden = true; return; }
-    box.hidden = false;
-
-    const list = el("fileBatchList-" + storeKey);
-    list.innerHTML = Array.from(groups.entries()).map(([label, info]) => {
-      const when = info.uploadedAt ? new Date(info.uploadedAt).toLocaleString("vi-VN") : "";
-      return `<div class="file-batch-row">
-        <span class="file-batch-name">${escapeHtml(label)}</span>
-        <span class="muted">${info.count.toLocaleString("vi-VN")} dòng${when ? " · " + when : ""}</span>
-        <button class="btn btn-danger btn-sm" data-label="${escapeHtml(label)}">Xóa file này</button>
-      </div>`;
-    }).join("");
-
-    list.querySelectorAll("button[data-label]").forEach(btn => {
-      btn.onclick = async () => {
-        const label = btn.dataset.label;
-        if (!confirm(`Xóa toàn bộ dữ liệu từ "${label}"?`)) return;
-        const targets = st.all.filter(({ value }) => batchLabel(value) === label);
-        for (const t of targets) await DB.delete(storeKey, t.key);
-        await refreshDataManager(storeKey);
-      };
-    });
-  }
-
-  function applyManagerSearch(storeKey) {
-    const st = managerState[storeKey];
-    const q = stripDiacritics(st.search || "");
-    st.filtered = !q ? st.all : st.all.filter(({ value }) =>
-      Object.values(value).some(v => stripDiacritics(String(v ?? "")).includes(q))
-    );
-    st.page = 1;
-    renderManagerTable(storeKey);
-  }
-
-  function renderManagerTable(storeKey) {
-    const st = managerState[storeKey];
-    const cols = st.columns;
-    const table = el("table-" + storeKey);
-    const thead = table.querySelector("thead");
-    const tbody = table.querySelector("tbody");
-
-    thead.innerHTML = "<tr>" + cols.map(c => `<th>${escapeHtml(c)}</th>`).join("") + "<th>Thao tác</th></tr>";
-
-    const start = (st.page - 1) * st.pageSize;
-    const pageRows = st.filtered.slice(start, start + st.pageSize);
-
-    if (!pageRows.length) {
-      tbody.innerHTML = `<tr><td colspan="${cols.length + 1}" class="muted" style="padding:20px;">Chưa có dữ liệu</td></tr>`;
-    } else {
-      tbody.innerHTML = pageRows.map(row =>
-        "<tr>" + cols.map(c => `<td>${escapeHtml(formatCell(row.value[c]))}</td>`).join("") +
-        `<td class="row-actions"><button class="btn btn-ghost btn-sm act-edit">Sửa</button><button class="btn btn-danger btn-sm act-del">Xóa</button></td></tr>`
-      ).join("");
-      tbody.querySelectorAll(".act-edit").forEach((btn, i) => { btn.onclick = () => openRowModal(storeKey, pageRows[i]); });
-      tbody.querySelectorAll(".act-del").forEach((btn, i) => {
-        btn.onclick = async () => {
-          if (!confirm("Xóa dòng này?")) return;
-          await DB.delete(storeKey, pageRows[i].key);
-          await refreshDataManager(storeKey);
-        };
-      });
-    }
-
-    const maxPage = Math.max(1, Math.ceil(st.filtered.length / st.pageSize));
-    el("pageInfo-" + storeKey).textContent = `Trang ${st.page} / ${maxPage} (${st.filtered.length.toLocaleString("vi-VN")} dòng)`;
-  }
-
-  /* ================= Add / Edit row modal (shared by the 4 data managers) ================= */
-  let rowModalContext = null;
-
-  function openRowModal(storeKey, row) {
-    const meta = STORE_META[storeKey];
-    const st = managerState[storeKey];
-    const columns = meta.headers || st.columns;
-    const isNew = !row;
-
-    rowModalContext = { storeKey, key: row ? row.key : undefined, isNew, columns, originalValue: row ? row.value : null };
-    el("modalTitle").textContent = (isNew ? "Thêm dòng — " : "Sửa dòng — ") + meta.label;
-
-    const body = el("modalBody");
-    if (!columns.length) {
-      body.innerHTML = `<p class="muted">Chưa xác định được cột dữ liệu — hãy tải lên ít nhất 1 file trước.</p>`;
-    } else {
-      const values = row ? row.value : {};
-      body.innerHTML = `<div class="form-grid">` + columns.map(c => {
-        const isKey = meta.primaryKeyHeader === c;
-        const val = values[c] ?? "";
-        const disabledAttr = (isKey && !isNew) ? "disabled" : "";
-        return `<div class="form-field"><label>${escapeHtml(c)}${isKey ? " 🔑" : ""}</label><input type="text" data-col="${escapeHtml(c)}" value="${escapeHtml(val)}" ${disabledAttr}/></div>`;
-      }).join("") + `</div>`;
-    }
-    el("modalOverlay").hidden = false;
-  }
-
-  function closeRowModal() {
-    el("modalOverlay").hidden = true;
-    rowModalContext = null;
-  }
-
-  function wireRowModal() {
-    el("modalClose").onclick = closeRowModal;
-    el("modalCancel").onclick = closeRowModal;
-    el("modalSave").onclick = async () => {
-      if (!rowModalContext || !rowModalContext.columns.length) { closeRowModal(); return; }
-      const { storeKey, key, isNew, originalValue } = rowModalContext;
-      const inputs = el("modalBody").querySelectorAll("input[data-col]");
-      const record = originalValue ? { ...originalValue } : {};
-      inputs.forEach(inp => { record[inp.dataset.col] = inp.value; });
-
-      if (isNew) {
-        await DB.bulkPut(storeKey, [record]);
-      } else {
-        await DB.put(storeKey, record, key);
-      }
-      closeRowModal();
-      await refreshDataManager(storeKey);
-    };
   }
 
   /* ================= Orders / Reports tab (API-backed) ================= */
@@ -860,6 +561,184 @@
     }
 
     reports.filter(r => r.status === "processing").forEach(r => pollMasterStatus(r.id));
+  }
+
+  /* ================= Điều chỉnh doanh thu Reports tab (API-backed) — mirrors
+     the Master File tab above, pointed at /api/adjustments-reports. Unlike
+     Combo/Cashflow/Master File, this data isn't joined into the Orders
+     Dashboard's query engine (it's a standalone record-keeping viewer, same
+     role the old IndexedDB manager played), so instead of "uploading also
+     refreshes the Dashboard" it gets its own read-only rows viewer — click
+     "Xem dữ liệu" on a ready Report to expand its first 50 rows inline. ================= */
+  let adjustmentsPollTimers = {};
+  let adjustmentsExpandedReportId = null;
+  let adjustmentsExpandedRows = null; // {rows, total, page, pageSize} for the currently expanded report, or null while loading
+
+  const ADJUSTMENT_ROW_COLS = [
+    { key: "transactionId", label: "Mã giao dịch" },
+    { key: "adjustmentDate", label: "Ngày hoàn thành điều chỉnh đơn hàng" },
+    { key: "adjustmentType", label: "Loại điều chỉnh | Mô tả" },
+    { key: "reason", label: "Lý do điều chỉnh" },
+    { key: "amount", label: "Số tiền điều chỉnh", fmt: v => fmtNumber(v) },
+    { key: "relatedOrderId", label: "Mã đơn hàng liên quan" },
+    { key: "paymentCompletedDate", label: "Ngày hoàn thành thanh toán" },
+  ];
+
+  function wireAdjustmentsTab() {
+    const dz = el("adjustmentsUploadDropzone");
+    const input = el("adjustmentsUploadInput");
+    if (!API.isAdmin()) {
+      dz.hidden = true;
+    } else {
+      ["dragenter", "dragover"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add("dragover"); }));
+      ["dragleave", "drop"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove("dragover"); }));
+      dz.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) handleAdjustmentsUpload(f); });
+      input.addEventListener("change", e => {
+        const f = e.target.files[0];
+        if (f) handleAdjustmentsUpload(f);
+        input.value = "";
+      });
+    }
+    refreshAdjustmentsReportsList();
+  }
+
+  async function handleAdjustmentsUpload(file) {
+    const box = el("adjustmentsUploadSummary");
+    box.className = "import-summary";
+    box.textContent = `Đang tải lên "${file.name}"...`;
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await API.apiFetch("/api/adjustments-reports", { method: "POST", body: formData });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Lỗi ${res.status}`);
+      }
+      const created = await res.json();
+      box.className = "import-summary ok";
+      box.textContent = `Đã tải lên — đang xử lý...`;
+      await refreshAdjustmentsReportsList();
+      pollAdjustmentsStatus(created.id);
+    } catch (err) {
+      box.className = "import-summary err";
+      box.textContent = "Lỗi tải lên: " + err.message;
+    }
+  }
+
+  function pollAdjustmentsStatus(reportId) {
+    if (adjustmentsPollTimers[reportId]) clearInterval(adjustmentsPollTimers[reportId]);
+    adjustmentsPollTimers[reportId] = setInterval(async () => {
+      try {
+        const report = await API.apiJson(`/api/adjustments-reports/${reportId}`);
+        if (report.status !== "processing") {
+          clearInterval(adjustmentsPollTimers[reportId]);
+          delete adjustmentsPollTimers[reportId];
+          await refreshAdjustmentsReportsList();
+        }
+      } catch (e) { /* transient — keep polling */ }
+    }, 2500);
+  }
+
+  async function toggleAdjustmentsExpand(reportId) {
+    if (adjustmentsExpandedReportId === reportId) {
+      adjustmentsExpandedReportId = null;
+      adjustmentsExpandedRows = null;
+      await refreshAdjustmentsReportsList();
+      return;
+    }
+    adjustmentsExpandedReportId = reportId;
+    adjustmentsExpandedRows = null;
+    await refreshAdjustmentsReportsList();
+    try {
+      const result = await API.apiJson(`/api/adjustments-reports/${reportId}/rows?page=1&pageSize=50`);
+      if (adjustmentsExpandedReportId !== reportId) return; // collapsed while the request was in flight
+      adjustmentsExpandedRows = result;
+      await refreshAdjustmentsReportsList();
+    } catch (err) {
+      adjustmentsExpandedReportId = null;
+      adjustmentsExpandedRows = null;
+      alert("Lỗi tải dữ liệu: " + err.message);
+      await refreshAdjustmentsReportsList();
+    }
+  }
+
+  function renderAdjustmentsExpandedRowHtml(colspan) {
+    if (!adjustmentsExpandedRows) {
+      return `<tr class="group-detail-row"><td colspan="${colspan}" class="muted" style="padding:12px;">Đang tải...</td></tr>`;
+    }
+    const { rows, total } = adjustmentsExpandedRows;
+    const rowsHtml = rows.map(row =>
+      "<tr>" + ADJUSTMENT_ROW_COLS.map(c => {
+        const v = row[c.key];
+        return `<td>${v == null || v === "" ? "" : (c.fmt ? c.fmt(v) : escapeHtml(v))}</td>`;
+      }).join("") + "</tr>"
+    ).join("");
+    const note = total > rows.length
+      ? `<p class="muted" style="margin:8px 0 0;">Hiển thị ${rows.length.toLocaleString("vi-VN")} / ${total.toLocaleString("vi-VN")} dòng đầu tiên.</p>`
+      : "";
+    return `<tr class="group-detail-row"><td colspan="${colspan}">
+        <div class="table-scroll" style="max-height:320px;">
+          <table><thead><tr>${ADJUSTMENT_ROW_COLS.map(c => `<th>${escapeHtml(c.label)}</th>`).join("")}</tr></thead>
+          <tbody>${rowsHtml || `<tr><td colspan="${ADJUSTMENT_ROW_COLS.length}" class="muted">Không có dữ liệu</td></tr>`}</tbody></table>
+        </div>
+        ${note}
+      </td></tr>`;
+  }
+
+  async function refreshAdjustmentsReportsList() {
+    const isAdmin = API.isAdmin();
+    let reports;
+    try {
+      reports = await API.apiJson("/api/adjustments-reports");
+    } catch (e) {
+      el("adjustmentsReportsListBody").innerHTML = `<p class="muted">Không tải được danh sách Report: ${escapeHtml(e.message)}</p>`;
+      return;
+    }
+    el("adjustmentsReportsListCount").textContent = `${reports.length.toLocaleString("vi-VN")} Report`;
+
+    const body = el("adjustmentsReportsListBody");
+    if (!reports.length) {
+      body.innerHTML = `<p class="muted" style="padding:16px;">Chưa có Report nào.</p>`;
+      return;
+    }
+
+    const colspan = 6 + (isAdmin ? 1 : 0);
+    body.innerHTML = `<div class="table-scroll"><table><thead><tr>
+        <th>Report</th><th>Trạng thái</th><th>Số dòng</th><th>Tải lên lúc</th><th>Kênh bán hàng</th><th>Dữ liệu</th>${isAdmin ? "<th>Thao tác</th>" : ""}
+      </tr></thead><tbody>` + reports.map(r => {
+        const isExpanded = adjustmentsExpandedReportId === r.id;
+        const rowHtml = `
+        <tr>
+          <td>${escapeHtml(r.name)}</td>
+          <td>${STATUS_BADGE[r.status] || escapeHtml(r.status)}${r.status === "failed" && r.error_message ? `<div class="muted" style="margin-top:4px;">${escapeHtml(r.error_message)}</div>` : ""}</td>
+          <td>${r.row_count != null ? r.row_count.toLocaleString("vi-VN") : "–"}</td>
+          <td>${new Date(r.uploaded_at).toLocaleString("vi-VN")}</td>
+          <td>${isAdmin ? channelSelectHtml(r.id, r.sales_channel_id) : escapeHtml(channelName(r.sales_channel_id))}</td>
+          <td>${r.status === "ready" ? `<button class="btn btn-ghost btn-sm adjustments-view-btn" data-report-id="${escapeHtml(r.id)}">${isExpanded ? "Ẩn" : "Xem"} dữ liệu</button>` : ""}</td>
+          ${isAdmin ? `<td><button class="btn btn-danger btn-sm" data-del="${escapeHtml(r.id)}">Xóa</button></td>` : ""}
+        </tr>`;
+        return rowHtml + (isExpanded ? renderAdjustmentsExpandedRowHtml(colspan) : "");
+      }).join("") + `</tbody></table></div>`;
+
+    if (isAdmin) {
+      body.querySelectorAll("button[data-del]").forEach(btn => {
+        btn.onclick = async () => {
+          const id = btn.dataset.del;
+          const report = reports.find(r => r.id === id);
+          if (!confirm(`Xóa toàn bộ Report "${report ? report.name : id}"? Hành động này không thể hoàn tác.`)) return;
+          await API.apiJson(`/api/adjustments-reports/${id}`, { method: "DELETE" });
+          if (adjustmentsExpandedReportId === id) { adjustmentsExpandedReportId = null; adjustmentsExpandedRows = null; }
+          await refreshAdjustmentsReportsList();
+        };
+      });
+      wireChannelSelects(body, "/api/adjustments-reports", refreshAdjustmentsReportsList);
+    }
+
+    body.querySelectorAll(".adjustments-view-btn").forEach(btn => {
+      btn.onclick = () => toggleAdjustmentsExpand(btn.dataset.reportId);
+    });
+
+    reports.filter(r => r.status === "processing").forEach(r => pollAdjustmentsStatus(r.id));
   }
 
   /* ================= Sales Channels (Kênh bán hàng) — a plain named list,
@@ -1714,13 +1593,12 @@
 
   async function initApp() {
     initTabs();
-    Object.keys(STORE_META).forEach(setupDataManager);
-    wireRowModal();
-    await refreshSalesChannelsCache(); // Đơn hàng/Dòng tiền lists render a channel <select> per row from this
+    await refreshSalesChannelsCache(); // Đơn hàng/Dòng tiền/Điều chỉnh lists render a channel <select> per row from this
     wireOrdersTab();
     wireCashflowTab();
     wireComboTab();
     wireMasterTab();
+    wireAdjustmentsTab();
     wireSalesChannelsTab();
     showApp();
     refreshDashboard();

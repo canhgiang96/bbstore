@@ -52,6 +52,14 @@ def master_parquet_key(report_id: str) -> str:
     return f"master-reports/{report_id}/data.parquet"
 
 
+def adjustments_original_key(report_id: str, filename: str) -> str:
+    return f"adjustments-reports/{report_id}/original.xlsx"
+
+
+def adjustments_parquet_key(report_id: str) -> str:
+    return f"adjustments-reports/{report_id}/data.parquet"
+
+
 def upload_bytes(key: str, data: bytes, content_type: str) -> None:
     s = get_settings()
     _client().put_object(Bucket=s.r2_bucket_name, Key=key, Body=data, ContentType=content_type)

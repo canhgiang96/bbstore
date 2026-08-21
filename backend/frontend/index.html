@@ -416,8 +416,29 @@
     </div>
   </section>
 
-  <!-- ============ DATA MANAGER TABS (adjustments) ============ -->
-  <section class="tab-panel" id="panel-adjustments" hidden></section>
+  <!-- ============ ĐIỀU CHỈNH DOANH THU REPORTS TAB (server-backed — standalone record-keeping viewer, not joined into the Orders Dashboard) ============ -->
+  <section class="tab-panel" id="panel-adjustments" hidden>
+    <div class="data-panel-header">
+      <h2>Điều chỉnh doanh thu — Report</h2>
+    </div>
+
+    <div class="drop-zone" id="adjustmentsUploadDropzone">
+      <div class="drop-zone-icon">📁</div>
+      <h2>Kéo thả file Excel vào đây</h2>
+      <p>hoặc</p>
+      <label class="btn btn-primary" for="adjustmentsUploadInput">Chọn file (.xlsx, .xls, .csv)</label>
+      <input type="file" id="adjustmentsUploadInput" accept=".xlsx,.xls,.csv" hidden />
+      <div class="import-summary" id="adjustmentsUploadSummary"></div>
+    </div>
+
+    <div class="card table-card">
+      <div class="table-card-header">
+        <h3>Danh sách Report</h3>
+        <span class="muted" id="adjustmentsReportsListCount"></span>
+      </div>
+      <div id="adjustmentsReportsListBody"></div>
+    </div>
+  </section>
 
   <!-- ============ SALES CHANNELS (Kênh bán hàng) — plain named list, not a file-upload Report; used to tag Đơn hàng/Dòng tiền/Điều chỉnh doanh thu uploads ============ -->
   <section class="tab-panel" id="panel-channels" hidden>
@@ -453,23 +474,7 @@
 
 </div><!-- /#appShell -->
 
-<!-- ============ MODAL (add / edit row — Master/Combo/Cashflow/Adjustments only) ============ -->
-<div class="modal-overlay" id="modalOverlay" hidden>
-  <div class="modal card">
-    <div class="modal-header">
-      <h3 id="modalTitle">Thêm dòng</h3>
-      <button class="modal-close" id="modalClose">✕</button>
-    </div>
-    <div class="modal-body" id="modalBody"></div>
-    <div class="modal-footer">
-      <button class="btn btn-ghost" id="modalCancel">Hủy</button>
-      <button class="btn btn-primary" id="modalSave">Lưu</button>
-    </div>
-  </div>
-</div>
-
-<script src="js/db.js?v=24"></script>
-<script src="js/api.js?v=24"></script>
-<script src="js/app.js?v=24"></script>
+<script src="js/api.js?v=25"></script>
+<script src="js/app.js?v=25"></script>
 </body>
 </html>
