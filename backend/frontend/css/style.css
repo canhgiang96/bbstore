@@ -302,6 +302,27 @@ tr.group-detail-row { background: var(--bg); }
   .mapping-grid { grid-template-columns: 1fr; }
   .form-grid { grid-template-columns: 1fr; }
 }
+
+/* Phone/tablet: the topbar's 3 flex children (brand, main nav, user menu)
+   have no room to sit on one line below ~640px — without this they each
+   shrink-wrap individually into cramped multi-line text instead of the nav
+   dropping to its own row. Ordering the nav after the user menu (both stay
+   order 0, so they keep their side-by-side row-1 placement) and forcing it
+   to flex-basis:100% pushes it onto row 2 as one clean wrapping nav bar. */
+@media (max-width: 640px) {
+  .topbar-inner { flex-wrap: wrap; padding: 10px 16px; row-gap: 8px; }
+  .brand { font-size: 15px; }
+  .brand-icon { font-size: 19px; }
+  #mainTabs { order: 3; flex: 1 1 100%; gap: 2px; }
+  #mainTabs .tab-btn { padding: 6px 9px; font-size: 12.5px; }
+  .user-menu #userDisplayName { display: none; } /* keep only "Đăng xuất" — no room for the name/role too */
+  .container { padding: 16px; }
+  .filters { padding: 16px; gap: 12px; }
+  .kpi-card { padding: 14px 16px; }
+  .kpi-value { font-size: 22px; }
+  .detail-toolbar-controls input#tableSearch { width: 100%; }
+}
+
 @media (max-width: 560px) {
   .kpi-grid { grid-template-columns: 1fr; }
 }
