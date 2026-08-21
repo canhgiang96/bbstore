@@ -33,12 +33,12 @@ DETAIL_COLUMN_LABELS = {
     "platformFee": "Phí sàn", "piship": "Phí Piship", "phiAff": "Phí AFF",
     "phanLoaiKho": "Phân loại kho", "phanLoaiMuc": "Phân loại mục", "phanLoaiSp": "Phân loại sản phẩm",
     "giaVon": "Giá vốn", "gmv": "GMV", "doanhThuThuan": "Doanh thu thuần", "nmv": "NMV",
-    "loiNhuanGop": "Lợi nhuận gộp",
+    "loiNhuanGop": "Lợi nhuận gộp", "salesChannel": "Kênh bán hàng",
 }
 GROUP_BY_LABELS = {
     "sku": "SKU", "product": "Sản phẩm", "category": "Danh mục", "customer": "Khách hàng",
     "status": "Trạng thái", "warehouseType": "Phân loại kho", "itemGroup": "Phân loại mục",
-    "productType": "Phân loại sản phẩm", "orderId": "Mã đơn hàng",
+    "productType": "Phân loại sản phẩm", "orderId": "Mã đơn hàng", "salesChannel": "Kênh bán hàng",
 }
 GROUP_AGG_LABELS = {
     "rowCount": "Số dòng", "quantity": "Số lượng", "returnedQty": "SL hoàn trả",
@@ -116,6 +116,34 @@ async def _all_ready_master_parquet_paths() -> list:
     return [get_local_parquet(r["id"], r["parquet_key"]) for r in reports if r.get("parquet_key")]
 
 
+async def _all_ready_parquet_paths_by_channel() -> dict:
+    """Groups every ready Orders Report's local Parquet path by its assigned
+    Sales Channel name (unassigned/orphaned-FK Reports group under the
+    empty string key) — see query_engine._channel_tagged_source_sql. Two
+    plain queries + a Python-side dict merge, rather than relying on
+    PostgREST's embedded-resource select syntax (not exercised elsewhere in
+    this codebase, and not worth risking getting the embed syntax wrong
+    with no way to test against real Supabase). Best-effort: if
+    sales_channels doesn't exist yet (before the migration is run), every
+    Report just groups under "" — same as "no channels created yet".
+    """
+    reports = await db.pg_select("reports", {"status": "eq.ready", "select": "id,parquet_key,sales_channel_id"})
+    try:
+        channels = await db.pg_select("sales_channels", {"select": "id,name"})
+    except Exception:  # noqa: BLE001 — channel tagging is best-effort, never worth 500ing the whole Dashboard for
+        channels = []
+    channel_names = {c["id"]: c["name"] for c in channels}
+
+    groups: dict = {}
+    for r in reports:
+        if not r.get("parquet_key"):
+            continue
+        path = get_local_parquet(r["id"], r["parquet_key"])
+        name = channel_names.get(r.get("sales_channel_id"), "")
+        groups.setdefault(name, []).append(path)
+    return groups
+
+
 @dashboard_router.get("/summary", response_model=SummaryOut)
 async def dashboard_summary(
     from_: Optional[str] = Query(None, alias="from"),
@@ -126,16 +154,19 @@ async def dashboard_summary(
     itemGroup: list[str] = Query([]),
     productType: list[str] = Query([]),
     sku: Optional[str] = None,
+    salesChannel: list[str] = Query([]),
     user: dict = Depends(get_current_user),
 ):
     paths = await _all_ready_parquet_paths()
     cashflow_paths = await _all_ready_cashflow_parquet_paths()
     combo_paths = await _all_ready_combo_parquet_paths()
     master_paths = await _all_ready_master_parquet_paths()
+    channel_paths = await _all_ready_parquet_paths_by_channel()
     return run_summary_query(
         paths, from_date=from_, to_date=to, category=category, status=status,
         cashflow_source=cashflow_paths, combo_source=combo_paths, master_source=master_paths,
         warehouse_type=warehouseType, item_group=itemGroup, product_type=productType, sku=sku,
+        channel_source=channel_paths, sales_channel=salesChannel,
     )
 
 
@@ -169,6 +200,7 @@ async def dashboard_rows(
     pageSize: int = 15,
     pathBy: list[str] = Query([]),
     pathValue: list[str] = Query([]),
+    salesChannel: list[str] = Query([]),
     user: dict = Depends(get_current_user),
 ):
     path_filters = _zip_path_filters(pathBy, pathValue)
@@ -176,12 +208,13 @@ async def dashboard_rows(
     cashflow_paths = await _all_ready_cashflow_parquet_paths()
     combo_paths = await _all_ready_combo_parquet_paths()
     master_paths = await _all_ready_master_parquet_paths()
+    channel_paths = await _all_ready_parquet_paths_by_channel()
     return run_rows_query(
         paths, from_date=from_, to_date=to, category=category, status=status,
         search=search, sort=sort, sort_dir=sort_dir, page=page, page_size=pageSize,
         cashflow_source=cashflow_paths, combo_source=combo_paths, master_source=master_paths,
         warehouse_type=warehouseType, item_group=itemGroup, product_type=productType, sku=sku,
-        path_filters=path_filters,
+        path_filters=path_filters, channel_source=channel_paths, sales_channel=salesChannel,
     )
 
 
@@ -203,6 +236,7 @@ async def dashboard_rows_grouped(
     pageSize: int = 15,
     pathBy: list[str] = Query([]),
     pathValue: list[str] = Query([]),
+    salesChannel: list[str] = Query([]),
     user: dict = Depends(get_current_user),
 ):
     if groupBy not in GROUP_BY_COLUMNS:
@@ -212,12 +246,13 @@ async def dashboard_rows_grouped(
     cashflow_paths = await _all_ready_cashflow_parquet_paths()
     combo_paths = await _all_ready_combo_parquet_paths()
     master_paths = await _all_ready_master_parquet_paths()
+    channel_paths = await _all_ready_parquet_paths_by_channel()
     return run_grouped_rows_query(
         paths, from_date=from_, to_date=to, category=category, status=status,
         search=search, group_by=groupBy, sort=sort, sort_dir=sortDir, page=page, page_size=pageSize,
         cashflow_source=cashflow_paths, combo_source=combo_paths, master_source=master_paths,
         warehouse_type=warehouseType, item_group=itemGroup, product_type=productType, sku=sku,
-        path_filters=path_filters,
+        path_filters=path_filters, channel_source=channel_paths, sales_channel=salesChannel,
     )
 
 
@@ -236,6 +271,7 @@ async def dashboard_export(
     groupBy: Optional[str] = None,
     sort: Optional[str] = None,
     sortDir: str = "asc",
+    salesChannel: list[str] = Query([]),
     user: dict = Depends(get_current_user),
 ):
     """Exports every row/group matching the current Detail-table view (not
@@ -256,11 +292,13 @@ async def dashboard_export(
     cashflow_paths = await _all_ready_cashflow_parquet_paths()
     combo_paths = await _all_ready_combo_parquet_paths()
     master_paths = await _all_ready_master_parquet_paths()
+    channel_paths = await _all_ready_parquet_paths_by_channel()
     rows = run_export_query(
         paths, from_date=from_, to_date=to, category=category, status=status,
         search=search, group_by=groupBy, sort=sort, sort_dir=sortDir,
         cashflow_source=cashflow_paths, combo_source=combo_paths, master_source=master_paths,
         warehouse_type=warehouseType, item_group=itemGroup, product_type=productType, sku=sku,
+        channel_source=channel_paths, sales_channel=salesChannel,
     )
 
     labels = {**GROUP_AGG_LABELS, "groupValue": GROUP_BY_LABELS.get(groupBy, "Nhóm")} if groupBy else DETAIL_COLUMN_LABELS

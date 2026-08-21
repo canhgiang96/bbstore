@@ -15,12 +15,12 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Up
 from .. import db, storage
 from ..deps import get_current_user, require_admin
 from ..excel_to_parquet import MappingError, excel_to_parquet, get_original_headers
-from ..models import MappingUpdateRequest, ReportCreatedOut, ReportDetailOut, ReportOut
+from ..models import ChannelUpdateRequest, MappingUpdateRequest, ReportCreatedOut, ReportDetailOut, ReportOut
 from ..query_engine import invalidate_local_parquet_cache
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
-REPORT_LIST_FIELDS = "id,name,uploaded_at,uploaded_by,row_count,status,error_message"
+REPORT_LIST_FIELDS = "id,name,uploaded_at,uploaded_by,row_count,status,error_message,sales_channel_id"
 
 
 async def _process_report(report_id: str, xlsx_bytes: bytes) -> None:
@@ -132,6 +132,15 @@ async def update_mapping(report_id: str, body: MappingUpdateRequest, user: dict 
         "reports", {"id": f"eq.{report_id}"}, {"mapping": mapping, "row_count": row_count}
     )
     return {"ok": True, "rowCount": row_count}
+
+
+@router.patch("/{report_id}/channel")
+async def update_channel(report_id: str, body: ChannelUpdateRequest, user: dict = Depends(require_admin)):
+    row = await db.pg_select_one("reports", {"id": f"eq.{report_id}"})
+    if not row:
+        raise HTTPException(status_code=404, detail="Không tìm thấy Report.")
+    await db.pg_update("reports", {"id": f"eq.{report_id}"}, {"sales_channel_id": body.sales_channel_id})
+    return {"ok": True}
 
 
 @router.delete("/{report_id}", status_code=204)

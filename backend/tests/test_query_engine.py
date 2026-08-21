@@ -916,3 +916,92 @@ def test_grouped_rows_gmv_nmv_loi_nhuan_gop_reconcile_with_summary(
     assert sum(r["gmv"] for r in result["rows"]) == summary["kpis"]["gmv"]
     assert sum(r["nmv"] for r in result["rows"]) == summary["kpis"]["nmv"]
     assert sum(r["loiNhuanGop"] for r in result["rows"]) == summary["kpis"]["loiNhuanGop"]
+
+
+# ---- Sales Channel ("Kênh bán hàng") join — each Orders Report's parquet
+# path is grouped by channel name (channel_source: {name: [paths]}) since
+# there's no per-row marker for which Report a row came from otherwise.
+# Written to CONTROLLED filenames (not tempfile.mkstemp's random name) so
+# channel_source's path lists can reference them directly.
+
+def _write_orders_parquet_at(path: str, rows: list[list]) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.append(HEADERS)
+    for r in rows:
+        ws.append(r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    parquet_bytes, row_count, _ = excel_to_parquet(buf)
+    assert row_count == len(rows)
+    with open(path, "wb") as f:
+        f.write(parquet_bytes)
+
+
+@pytest.fixture
+def channel_tagged_reports():
+    tmpdir = tempfile.mkdtemp()
+    shopee_path = os.path.join(tmpdir, "R1.parquet")
+    lazada_path = os.path.join(tmpdir, "R2.parquet")
+    untagged_path = os.path.join(tmpdir, "R3.parquet")
+    _write_orders_parquet_at(shopee_path, [
+        ["S1", "2026-03-01 00:00", "Hoàn thành", "", "A100-1", "SP A", "Áo", 100000, 1, 0],
+    ])
+    _write_orders_parquet_at(lazada_path, [
+        ["L1", "2026-03-02 00:00", "Hoàn thành", "", "B200-1", "SP B", "Quần", 50000, 1, 0],
+    ])
+    _write_orders_parquet_at(untagged_path, [
+        ["U1", "2026-03-03 00:00", "Hoàn thành", "", "C300-1", "SP C", "Áo", 20000, 1, 0],
+    ])
+    yield {"shopee": shopee_path, "lazada": lazada_path, "untagged": untagged_path}
+    for p in (shopee_path, lazada_path, untagged_path):
+        os.remove(p)
+    os.rmdir(tmpdir)
+
+
+def test_rows_sales_channel_tags_rows_by_report(channel_tagged_reports):
+    paths = channel_tagged_reports
+    all_paths = [paths["shopee"], paths["lazada"], paths["untagged"]]
+    channel_source = {"Shopee": [paths["shopee"]], "Lazada": [paths["lazada"]]}
+    result = run_rows_query(all_paths, page_size=10, channel_source=channel_source)
+    by_order = {r["orderId"]: r for r in result["rows"]}
+    assert by_order["S1"]["salesChannel"] == "Shopee"
+    assert by_order["L1"]["salesChannel"] == "Lazada"
+    assert by_order["U1"]["salesChannel"] == ""  # not in any channel group -> unassigned
+
+
+def test_rows_no_channel_source_defaults_all_rows_unassigned(channel_tagged_reports):
+    paths = channel_tagged_reports
+    all_paths = [paths["shopee"], paths["lazada"], paths["untagged"]]
+    result = run_rows_query(all_paths, page_size=10, channel_source=None)
+    assert all(r["salesChannel"] == "" for r in result["rows"])
+
+
+def test_summary_sales_channel_facet_lists_every_channel(channel_tagged_reports):
+    paths = channel_tagged_reports
+    all_paths = [paths["shopee"], paths["lazada"], paths["untagged"]]
+    channel_source = {"Shopee": [paths["shopee"]], "Lazada": [paths["lazada"]]}
+    result = run_summary_query(all_paths, channel_source=channel_source)
+    assert set(result["facets"]["salesChannels"]) == {"Shopee", "Lazada"}  # "" filtered out, like other facets
+
+
+def test_rows_sales_channel_filter_narrows_to_matching_reports(channel_tagged_reports):
+    paths = channel_tagged_reports
+    all_paths = [paths["shopee"], paths["lazada"], paths["untagged"]]
+    channel_source = {"Shopee": [paths["shopee"]], "Lazada": [paths["lazada"]]}
+    result = run_rows_query(all_paths, page_size=10, channel_source=channel_source, sales_channel=["Shopee"])
+    assert {r["orderId"] for r in result["rows"]} == {"S1"}
+
+
+def test_grouped_rows_by_sales_channel(channel_tagged_reports):
+    paths = channel_tagged_reports
+    all_paths = [paths["shopee"], paths["lazada"], paths["untagged"]]
+    channel_source = {"Shopee": [paths["shopee"]], "Lazada": [paths["lazada"]]}
+    result = run_grouped_rows_query(
+        all_paths, group_by="salesChannel", channel_source=channel_source, page_size=10,
+    )
+    by_group = {r["groupValue"]: r for r in result["rows"]}
+    assert set(by_group) == {"Shopee", "Lazada", ""}
+    assert by_group["Shopee"]["rowCount"] == 1
+    assert by_group[""]["rowCount"] == 1  # the untagged Report

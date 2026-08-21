@@ -14,11 +14,11 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Up
 from .. import db, storage
 from ..cashflow_to_parquet import CashflowMappingError, cashflow_excel_to_parquet
 from ..deps import get_current_user, require_admin
-from ..models import ReportCreatedOut, ReportDetailOut, ReportOut
+from ..models import ChannelUpdateRequest, ReportCreatedOut, ReportDetailOut, ReportOut
 
 router = APIRouter(prefix="/api/cashflow-reports", tags=["cashflow-reports"])
 
-CASHFLOW_REPORT_LIST_FIELDS = "id,name,uploaded_at,uploaded_by,row_count,status,error_message"
+CASHFLOW_REPORT_LIST_FIELDS = "id,name,uploaded_at,uploaded_by,row_count,status,error_message,sales_channel_id"
 
 
 async def _process_cashflow_report(report_id: str, xlsx_bytes) -> None:
@@ -91,6 +91,15 @@ async def get_cashflow_report(report_id: str, user: dict = Depends(get_current_u
     if not row:
         raise HTTPException(status_code=404, detail="Không tìm thấy Report.")
     return ReportDetailOut(**row)
+
+
+@router.patch("/{report_id}/channel")
+async def update_channel(report_id: str, body: ChannelUpdateRequest, user: dict = Depends(require_admin)):
+    row = await db.pg_select_one("cashflow_reports", {"id": f"eq.{report_id}"})
+    if not row:
+        raise HTTPException(status_code=404, detail="Không tìm thấy Report.")
+    await db.pg_update("cashflow_reports", {"id": f"eq.{report_id}"}, {"sales_channel_id": body.sales_channel_id})
+    return {"ok": True}
 
 
 @router.delete("/{report_id}", status_code=204)

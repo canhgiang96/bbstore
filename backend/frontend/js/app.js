@@ -453,6 +453,42 @@
     failed: '<span class="pill bad">Lỗi</span>',
   };
 
+  // "Kênh bán hàng" assignment — shared by the Đơn hàng and Dòng tiền
+  // Report lists (see wireChannelSelects' call sites). dash.salesChannels
+  // is fetched once at startup (see refreshSalesChannelsCache) and kept in
+  // sync by the Kênh bán hàng tab's own add/delete actions.
+  function channelName(channelId) {
+    const c = dash.salesChannels.find(c => c.id === channelId);
+    return c ? c.name : "(Chưa gán)";
+  }
+
+  function channelSelectHtml(reportId, currentChannelId) {
+    const options = ['<option value="">(Chưa gán)</option>'].concat(
+      dash.salesChannels.map(c =>
+        `<option value="${escapeHtml(c.id)}" ${c.id === currentChannelId ? "selected" : ""}>${escapeHtml(c.name)}</option>`
+      )
+    );
+    return `<select class="channel-select" data-report-id="${escapeHtml(reportId)}">${options.join("")}</select>`;
+  }
+
+  function wireChannelSelects(container, endpointBase, afterSave) {
+    container.querySelectorAll(".channel-select").forEach(sel => {
+      sel.onchange = async () => {
+        const reportId = sel.dataset.reportId;
+        try {
+          await API.apiJson(`${endpointBase}/${reportId}/channel`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sales_channel_id: sel.value || null }),
+          });
+          if (afterSave) await afterSave();
+        } catch (err) {
+          alert("Lỗi gán kênh bán hàng: " + err.message);
+        }
+      };
+    });
+  }
+
   async function refreshReportsList() {
     const isAdmin = API.isAdmin();
     let reports;
@@ -471,13 +507,14 @@
     }
 
     body.innerHTML = `<div class="table-scroll"><table><thead><tr>
-        <th>Report</th><th>Trạng thái</th><th>Số dòng</th><th>Tải lên lúc</th>${isAdmin ? "<th>Thao tác</th>" : ""}
+        <th>Report</th><th>Trạng thái</th><th>Số dòng</th><th>Tải lên lúc</th><th>Kênh bán hàng</th>${isAdmin ? "<th>Thao tác</th>" : ""}
       </tr></thead><tbody>` + reports.map(r => `
         <tr>
           <td>${escapeHtml(r.name)}</td>
           <td>${STATUS_BADGE[r.status] || escapeHtml(r.status)}${r.status === "failed" && r.error_message ? `<div class="muted" style="margin-top:4px;">${escapeHtml(r.error_message)}</div>` : ""}</td>
           <td>${r.row_count != null ? r.row_count.toLocaleString("vi-VN") : "–"}</td>
           <td>${new Date(r.uploaded_at).toLocaleString("vi-VN")}</td>
+          <td>${isAdmin ? channelSelectHtml(r.id, r.sales_channel_id) : escapeHtml(channelName(r.sales_channel_id))}</td>
           ${isAdmin ? `<td><button class="btn btn-danger btn-sm" data-del="${escapeHtml(r.id)}">Xóa</button></td>` : ""}
         </tr>
       `).join("") + `</tbody></table></div>`;
@@ -493,6 +530,7 @@
           refreshDashboard();
         };
       });
+      wireChannelSelects(body, "/api/reports", async () => { await refreshReportsList(); refreshDashboard(); });
     }
 
     // Any still-processing report needs a poller (e.g. after a page reload
@@ -580,13 +618,14 @@
     }
 
     body.innerHTML = `<div class="table-scroll"><table><thead><tr>
-        <th>Report</th><th>Trạng thái</th><th>Số dòng</th><th>Tải lên lúc</th>${isAdmin ? "<th>Thao tác</th>" : ""}
+        <th>Report</th><th>Trạng thái</th><th>Số dòng</th><th>Tải lên lúc</th><th>Kênh bán hàng</th>${isAdmin ? "<th>Thao tác</th>" : ""}
       </tr></thead><tbody>` + reports.map(r => `
         <tr>
           <td>${escapeHtml(r.name)}</td>
           <td>${STATUS_BADGE[r.status] || escapeHtml(r.status)}${r.status === "failed" && r.error_message ? `<div class="muted" style="margin-top:4px;">${escapeHtml(r.error_message)}</div>` : ""}</td>
           <td>${r.row_count != null ? r.row_count.toLocaleString("vi-VN") : "–"}</td>
           <td>${new Date(r.uploaded_at).toLocaleString("vi-VN")}</td>
+          <td>${isAdmin ? channelSelectHtml(r.id, r.sales_channel_id) : escapeHtml(channelName(r.sales_channel_id))}</td>
           ${isAdmin ? `<td><button class="btn btn-danger btn-sm" data-del="${escapeHtml(r.id)}">Xóa</button></td>` : ""}
         </tr>
       `).join("") + `</tbody></table></div>`;
@@ -602,6 +641,7 @@
           refreshDashboard();
         };
       });
+      wireChannelSelects(body, "/api/cashflow-reports", refreshCashflowReportsList);
     }
 
     reports.filter(r => r.status === "processing").forEach(r => pollCashflowStatus(r.id));
@@ -822,6 +862,90 @@
     reports.filter(r => r.status === "processing").forEach(r => pollMasterStatus(r.id));
   }
 
+  /* ================= Sales Channels (Kênh bán hàng) — a plain named list,
+     not a file-upload Report, so this tab is much simpler than the ones
+     above: no dropzone, no background processing, just add/delete. Used to
+     tag Đơn hàng/Dòng tiền Report uploads (see wireChannelSelects) and as a
+     Dashboard filter/group-by/column dimension for Orders. ================= */
+  async function refreshSalesChannelsCache() {
+    try {
+      dash.salesChannels = await API.apiJson("/api/sales-channels");
+    } catch (e) {
+      dash.salesChannels = [];
+    }
+  }
+
+  function wireSalesChannelsTab() {
+    const isAdmin = API.isAdmin();
+    el("channelAddCard").hidden = !isAdmin;
+    if (isAdmin) {
+      el("btnAddChannel").onclick = async () => {
+        const input = el("newChannelName");
+        const name = input.value.trim();
+        const box = el("channelAddSummary");
+        if (!name) return;
+        try {
+          await API.apiJson("/api/sales-channels", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name }),
+          });
+          input.value = "";
+          box.className = "import-summary ok";
+          box.textContent = `Đã thêm kênh "${name}".`;
+          await refreshSalesChannelsCache();
+          await refreshSalesChannelsList();
+        } catch (err) {
+          box.className = "import-summary err";
+          box.textContent = "Lỗi: " + err.message;
+        }
+      };
+    }
+    refreshSalesChannelsList();
+  }
+
+  async function refreshSalesChannelsList() {
+    const isAdmin = API.isAdmin();
+    let channels;
+    try {
+      channels = await API.apiJson("/api/sales-channels");
+    } catch (e) {
+      el("channelsListBody").innerHTML = `<p class="muted">Không tải được danh sách: ${escapeHtml(e.message)}</p>`;
+      return;
+    }
+    dash.salesChannels = channels;
+    el("channelsListCount").textContent = `${channels.length.toLocaleString("vi-VN")} kênh`;
+
+    const body = el("channelsListBody");
+    if (!channels.length) {
+      body.innerHTML = `<p class="muted" style="padding:16px;">Chưa có kênh bán hàng nào.</p>`;
+      return;
+    }
+
+    body.innerHTML = `<div class="table-scroll"><table><thead><tr>
+        <th>Tên kênh</th><th>Tạo lúc</th>${isAdmin ? "<th>Thao tác</th>" : ""}
+      </tr></thead><tbody>` + channels.map(c => `
+        <tr>
+          <td>${escapeHtml(c.name)}</td>
+          <td>${new Date(c.created_at).toLocaleString("vi-VN")}</td>
+          ${isAdmin ? `<td><button class="btn btn-danger btn-sm" data-del="${escapeHtml(c.id)}">Xóa</button></td>` : ""}
+        </tr>
+      `).join("") + `</tbody></table></div>`;
+
+    if (isAdmin) {
+      body.querySelectorAll("button[data-del]").forEach(btn => {
+        btn.onclick = async () => {
+          const id = btn.dataset.del;
+          const channel = channels.find(c => c.id === id);
+          if (!confirm(`Xóa kênh "${channel ? channel.name : id}"? Các Report đang gán kênh này sẽ chuyển về "(Chưa gán)".`)) return;
+          await API.apiJson(`/api/sales-channels/${id}`, { method: "DELETE" });
+          await refreshSalesChannelsCache();
+          await refreshSalesChannelsList();
+        };
+      });
+    }
+  }
+
   /* ================= Dashboard (aggregates every ready Report — see
      /api/dashboard/summary + /rows; the date/category/status filters below
      are how the user narrows the view, not a per-Report picker) ================= */
@@ -857,6 +981,8 @@
     selectedWarehouseType: new Set(),
     selectedItemGroup: new Set(),
     selectedProductType: new Set(),
+    selectedSalesChannel: new Set(),
+    salesChannels: [], // raw {id,name,...} list from /api/sales-channels — see refreshSalesChannelsCache
     lastFacets: null, // cached so "Xóa lọc" can redraw the checkbox lists without waiting on a fetch
     filtersWired: false,
     summarySeq: 0,
@@ -907,6 +1033,7 @@
     dash.selectedWarehouseType.forEach(v => params.append("warehouseType", v));
     dash.selectedItemGroup.forEach(v => params.append("itemGroup", v));
     dash.selectedProductType.forEach(v => params.append("productType", v));
+    dash.selectedSalesChannel.forEach(v => params.append("salesChannel", v));
     if (sku) params.set("sku", sku);
     Object.entries(extra || {}).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== "") params.set(k, v); });
     return params;
@@ -1123,6 +1250,7 @@
       dash.selectedWarehouseType.clear();
       dash.selectedItemGroup.clear();
       dash.selectedProductType.clear();
+      dash.selectedSalesChannel.clear();
       el("filterSku").value = "";
       if (dash.lastFacets) renderFacets(dash.lastFacets); // redraw checkboxes as unchecked
       applyFiltersAndRender();
@@ -1202,11 +1330,13 @@
     const warehouseTypes = [...(facets.warehouseTypes || [])].sort((a, b) => a.localeCompare(b, "vi"));
     const itemGroups = [...(facets.itemGroups || [])].sort((a, b) => a.localeCompare(b, "vi"));
     const productTypes = [...(facets.productTypes || [])].sort((a, b) => a.localeCompare(b, "vi"));
+    const salesChannels = [...(facets.salesChannels || [])].sort((a, b) => a.localeCompare(b, "vi"));
 
     renderMultiSelectFacet("filterStatusList", "filterStatusSummary", dash.selectedStatus, statuses);
     renderMultiSelectFacet("filterWarehouseTypeList", "filterWarehouseTypeSummary", dash.selectedWarehouseType, warehouseTypes);
     renderMultiSelectFacet("filterItemGroupList", "filterItemGroupSummary", dash.selectedItemGroup, itemGroups);
     renderMultiSelectFacet("filterProductTypeList", "filterProductTypeSummary", dash.selectedProductType, productTypes);
+    renderMultiSelectFacet("filterSalesChannelList", "filterSalesChannelSummary", dash.selectedSalesChannel, salesChannels);
   }
 
   /* ---- KPIs ---- */
@@ -1255,6 +1385,7 @@
     { key: "giaVon", label: "Giá vốn", fmt: v => fmtNumber(v) },
     { key: "loiNhuanGop", label: "Lợi nhuận gộp", fmt: v => fmtNumber(v) },
     { key: "trangThai", label: "Trạng thái" },
+    { key: "salesChannel", label: "Kênh bán hàng" },
   ];
 
   // Mirrors app/query_engine.py's ALLOWED_SORT_COLUMNS — only these flat
@@ -1272,7 +1403,7 @@
   const GROUP_BY_LABELS = {
     sku: "SKU", product: "Sản phẩm", category: "Danh mục", customer: "Khách hàng",
     status: "Trạng thái", warehouseType: "Phân loại kho", itemGroup: "Phân loại mục",
-    productType: "Phân loại sản phẩm", orderId: "Mã đơn hàng",
+    productType: "Phân loại sản phẩm", orderId: "Mã đơn hàng", salesChannel: "Kênh bán hàng",
   };
   const GROUP_AGG_COLS = [
     { key: "rowCount", label: "Số dòng", fmt: v => Number(v).toLocaleString("vi-VN") },
@@ -1585,10 +1716,12 @@
     initTabs();
     Object.keys(STORE_META).forEach(setupDataManager);
     wireRowModal();
+    await refreshSalesChannelsCache(); // Đơn hàng/Dòng tiền lists render a channel <select> per row from this
     wireOrdersTab();
     wireCashflowTab();
     wireComboTab();
     wireMasterTab();
+    wireSalesChannelsTab();
     showApp();
     refreshDashboard();
   }

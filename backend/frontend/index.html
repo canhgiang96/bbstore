@@ -47,6 +47,7 @@
       <button class="tab-btn" data-tab="combo">Combo</button>
       <button class="tab-btn" data-tab="cashflow">Dòng tiền</button>
       <button class="tab-btn" data-tab="adjustments">Điều chỉnh doanh thu</button>
+      <button class="tab-btn" data-tab="channels">Kênh bán hàng</button>
     </nav>
     <div class="user-menu">
       <span class="muted" id="userDisplayName"></span>
@@ -168,6 +169,13 @@
           <details class="multi-select">
             <summary class="multi-select-summary" id="filterProductTypeSummary">Tất cả</summary>
             <div class="multi-select-list" id="filterProductTypeList"></div>
+          </details>
+        </div>
+        <div class="filter-item filter-grow">
+          <label>Kênh bán hàng</label>
+          <details class="multi-select">
+            <summary class="multi-select-summary" id="filterSalesChannelSummary">Tất cả</summary>
+            <div class="multi-select-list" id="filterSalesChannelList"></div>
           </details>
         </div>
         <div class="filter-item filter-grow">
@@ -411,6 +419,32 @@
   <!-- ============ DATA MANAGER TABS (adjustments) ============ -->
   <section class="tab-panel" id="panel-adjustments" hidden></section>
 
+  <!-- ============ SALES CHANNELS (Kênh bán hàng) — plain named list, not a file-upload Report; used to tag Đơn hàng/Dòng tiền/Điều chỉnh doanh thu uploads ============ -->
+  <section class="tab-panel" id="panel-channels" hidden>
+    <div class="data-panel-header">
+      <h2>Kênh bán hàng</h2>
+    </div>
+
+    <div class="card" id="channelAddCard">
+      <div class="detail-toolbar-controls">
+        <div class="filter-item filter-grow">
+          <label>Tên kênh bán hàng</label>
+          <input type="text" id="newChannelName" placeholder="Ví dụ: Shopee, Lazada, TikTok Shop..." />
+        </div>
+        <button class="btn btn-primary" id="btnAddChannel" style="align-self:flex-end;">+ Thêm kênh</button>
+      </div>
+      <div class="import-summary" id="channelAddSummary"></div>
+    </div>
+
+    <div class="card table-card">
+      <div class="table-card-header">
+        <h3>Danh sách kênh bán hàng</h3>
+        <span class="muted" id="channelsListCount"></span>
+      </div>
+      <div id="channelsListBody"></div>
+    </div>
+  </section>
+
 </main>
 
 <footer class="footer">
@@ -434,8 +468,8 @@
   </div>
 </div>
 
-<script src="js/db.js?v=23"></script>
-<script src="js/api.js?v=23"></script>
-<script src="js/app.js?v=23"></script>
+<script src="js/db.js?v=24"></script>
+<script src="js/api.js?v=24"></script>
+<script src="js/app.js?v=24"></script>
 </body>
 </html>

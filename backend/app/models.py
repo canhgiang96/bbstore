@@ -38,6 +38,7 @@ class ReportOut(BaseModel):
     row_count: Optional[int] = None
     status: Literal["processing", "ready", "failed"]
     error_message: Optional[str] = None
+    sales_channel_id: Optional[str] = None
 
 
 class ReportDetailOut(ReportOut):
@@ -53,6 +54,25 @@ class ReportCreatedOut(BaseModel):
 
 class MappingUpdateRequest(BaseModel):
     mapping: dict[str, str]
+
+
+class ChannelUpdateRequest(BaseModel):
+    sales_channel_id: Optional[str] = None
+
+
+class SalesChannelCreateRequest(BaseModel):
+    name: str
+
+
+class SalesChannelUpdateRequest(BaseModel):
+    name: str
+
+
+class SalesChannelOut(BaseModel):
+    id: str
+    name: str
+    created_at: datetime
+    created_by: str
 
 
 class KpiOut(BaseModel):
@@ -89,6 +109,7 @@ class FacetsOut(BaseModel):
     warehouseTypes: list[str]
     itemGroups: list[str]
     productTypes: list[str]
+    salesChannels: list[str]
 
 
 class SummaryOut(BaseModel):

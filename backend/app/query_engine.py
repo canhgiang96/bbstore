@@ -22,6 +22,7 @@ DETAIL_COLUMNS = [
     "revenue", "doanhSo", "status", "trangThai", "discount", "voucher",
     "platformFee", "piship", "phiAff", "phanLoaiKho", "phanLoaiMuc",
     "phanLoaiSp", "giaVon", "gmv", "doanhThuThuan", "nmv", "loiNhuanGop",
+    "salesChannel",
 ]
 
 ALLOWED_SORT_COLUMNS = {
@@ -39,6 +40,7 @@ GROUP_BY_COLUMNS = {
     "customer": "customer", "status": "trangThai",
     "warehouseType": "phanLoaiKho", "itemGroup": "phanLoaiMuc",
     "productType": "phanLoaiSp", "orderId": "orderId",
+    "salesChannel": "salesChannel",
 }
 
 # Sortable aggregate columns for run_grouped_rows_query's result set — same
@@ -65,7 +67,7 @@ EMPTY_SUMMARY = {
     "topCustomers": [],
     "facets": {
         "categories": [], "statuses": [],
-        "warehouseTypes": [], "itemGroups": [], "productTypes": [],
+        "warehouseTypes": [], "itemGroups": [], "productTypes": [], "salesChannels": [],
     },
 }
 
@@ -118,6 +120,7 @@ def _in_clause(column: str, values, params: list):
 def _where_clause(
     from_date=None, to_date=None, category=None, status=None,
     warehouse_type=None, item_group=None, product_type=None, sku=None,
+    sales_channel=None,
 ):
     clauses = []
     params: list = []
@@ -138,11 +141,12 @@ def _where_clause(
         params.append(category)
     # Each of these accepts either a single value or a list — the Detail-table
     # filter bar's "Trạng thái"/"Phân loại kho"/"Phân loại mục"/"Phân loại
-    # sản phẩm" pickers are multi-select, so a filter can now mean "any of
-    # these values" (SQL IN), not just one exact match.
+    # sản phẩm"/"Kênh bán hàng" pickers are multi-select, so a filter can now
+    # mean "any of these values" (SQL IN), not just one exact match.
     for column, values in [
         ("trangThai", status), ("phanLoaiKho", warehouse_type),
         ("phanLoaiMuc", item_group), ("phanLoaiSp", product_type),
+        ("salesChannel", sales_channel),
     ]:
         in_clause = _in_clause(column, values, params)
         if in_clause:
@@ -242,8 +246,47 @@ def _master_join(master_source, sku_variant_expr: str) -> tuple[str, list, str, 
     )
 
 
+def _channel_tagged_source_sql(parquet_source, channel_groups: dict | None) -> tuple[str, list]:
+    """Returns (select_sql, params) for the base row source of
+    orders_working, tagging every row with which Sales Channel its Orders
+    Report was assigned to (or '' when unassigned/unknown).
+
+    Each Orders Report's Parquet is just a path in parquet_source — there's
+    no per-row marker for which Report (and therefore which channel) a row
+    came from. Rather than recovering that from filenames (fragile), the
+    caller groups Report paths by channel name in Python (channel_groups:
+    {channel_name: [paths]}) and this unions one tagged read_parquet() call
+    per channel — DuckDB's UNION ALL BY NAME (already relied on elsewhere in
+    this file for cross-Report schema differences) keeps that safe even
+    when different Reports' Parquets have slightly different optional
+    columns.
+    """
+    if not channel_groups:
+        return 'SELECT *, \'\' AS "salesChannel" FROM read_parquet(?, union_by_name=true)', [parquet_source]
+
+    all_paths = list(parquet_source) if isinstance(parquet_source, (list, tuple)) else [parquet_source]
+    covered: set = set()
+    parts: list[str] = []
+    params: list = []
+    for channel_name, paths in channel_groups.items():
+        paths_here = [p for p in paths if p in all_paths]
+        if not paths_here:
+            continue
+        covered.update(paths_here)
+        parts.append('SELECT *, ? AS "salesChannel" FROM read_parquet(?, union_by_name=true)')
+        params.extend([channel_name, paths_here])
+    unassigned = [p for p in all_paths if p not in covered]
+    if unassigned:
+        parts.append('SELECT *, \'\' AS "salesChannel" FROM read_parquet(?, union_by_name=true)')
+        params.append(unassigned)
+    if not parts:
+        return 'SELECT *, \'\' AS "salesChannel" FROM read_parquet(?, union_by_name=true)', [parquet_source]
+    return " UNION ALL BY NAME ".join(parts), params
+
+
 def _build_orders_working(
     con, parquet_source, available: set, combo_source, cashflow_source, master_source,
+    channel_source: dict | None = None,
 ) -> None:
     """Materializes a TEMP TABLE "orders_working" combining the Combo
     explosion and the Phí AFF join exactly once per call — every query below
@@ -267,6 +310,7 @@ def _build_orders_working(
     master_join_sql, master_params, muc_expr, phan_loai_sp_expr, phan_loai_kho_expr, gia_von_expr = _master_join(
         master_source, sku_variant_expr
     )
+    channel_source_sql, channel_params = _channel_tagged_source_sql(parquet_source, channel_source)
 
     # Combo-exploded children report "combo" for the 3 category labels
     # instead of a Master File lookup (confirmed with the user) — Giá vốn
@@ -339,19 +383,21 @@ def _build_orders_working(
           {gmv_row_expr} AS "gmv",
           {doanh_thu_thuan_row_expr} AS "doanhThuThuan",
           {nmv_row_expr} AS "nmv",
-          {loi_nhuan_gop_row_expr} AS "loiNhuanGop"
-        FROM read_parquet(?, union_by_name=true) o
+          {loi_nhuan_gop_row_expr} AS "loiNhuanGop",
+          o."salesChannel" AS "salesChannel"
+        FROM ({channel_source_sql}) o
         {combo_join_sql}
         {cashflow_join_sql}
         {master_join_sql}
     """
-    con.execute(create_sql, [*[parquet_source], *combo_params, *cashflow_params, *master_params])
+    con.execute(create_sql, [*channel_params, *combo_params, *cashflow_params, *master_params])
 
 
 def run_summary_query(
     parquet_source, from_date=None, to_date=None, category=None, status=None,
     cashflow_source=None, combo_source=None, master_source=None,
     warehouse_type=None, item_group=None, product_type=None, sku=None,
+    channel_source=None, sales_channel=None,
 ) -> dict:
     if _is_empty_source(parquet_source):
         return EMPTY_SUMMARY
@@ -360,9 +406,12 @@ def run_summary_query(
     try:
         where_sql, params = _where_clause(
             from_date, to_date, category, status, warehouse_type, item_group, product_type, sku,
+            sales_channel,
         )
         available = _available_columns(con, parquet_source)
-        _build_orders_working(con, parquet_source, available, combo_source, cashflow_source, master_source)
+        _build_orders_working(
+            con, parquet_source, available, combo_source, cashflow_source, master_source, channel_source,
+        )
 
         totals_sql = f"""
             SELECT
@@ -416,10 +465,13 @@ def run_summary_query(
               list(DISTINCT "trangThai") AS statuses,
               list(DISTINCT "phanLoaiKho") AS warehouse_types,
               list(DISTINCT "phanLoaiMuc") AS item_groups,
-              list(DISTINCT "phanLoaiSp") AS product_types
+              list(DISTINCT "phanLoaiSp") AS product_types,
+              list(DISTINCT "salesChannel") AS sales_channels
             FROM orders_working
         """
-        categories, statuses, warehouse_types, item_groups, product_types = con.execute(facets_sql).fetchone()
+        categories, statuses, warehouse_types, item_groups, product_types, sales_channels = con.execute(
+            facets_sql
+        ).fetchone()
 
         return {
             "kpis": {
@@ -449,6 +501,7 @@ def run_summary_query(
                 "warehouseTypes": sorted(w for w in (warehouse_types or []) if w),
                 "itemGroups": sorted(g for g in (item_groups or []) if g),
                 "productTypes": sorted(p for p in (product_types or []) if p),
+                "salesChannels": sorted(s for s in (sales_channels or []) if s),
             },
         }
     finally:
@@ -475,7 +528,7 @@ def run_rows_query(
     search=None, sort="date", sort_dir="asc", page=1, page_size=15,
     cashflow_source=None, combo_source=None, master_source=None,
     warehouse_type=None, item_group=None, product_type=None, sku=None,
-    path_filters=None,
+    path_filters=None, channel_source=None, sales_channel=None,
 ) -> dict:
     page = max(1, page)
     if _is_empty_source(parquet_source):
@@ -485,9 +538,12 @@ def run_rows_query(
     try:
         where_sql, params = _where_clause(
             from_date, to_date, category, status, warehouse_type, item_group, product_type, sku,
+            sales_channel,
         )
         available = _available_columns(con, parquet_source)
-        _build_orders_working(con, parquet_source, available, combo_source, cashflow_source, master_source)
+        _build_orders_working(
+            con, parquet_source, available, combo_source, cashflow_source, master_source, channel_source,
+        )
 
         # Drill-down request from a (possibly nested) group node in the
         # Detail-table's grouped view — narrows to exactly that node's
@@ -575,7 +631,7 @@ def run_grouped_rows_query(
     search=None, group_by="sku", sort="doanhSo", sort_dir="desc", page=1, page_size=15,
     cashflow_source=None, combo_source=None, master_source=None,
     warehouse_type=None, item_group=None, product_type=None, sku=None,
-    path_filters=None,
+    path_filters=None, channel_source=None, sales_channel=None,
 ) -> dict:
     """Server-side group-by-column aggregation over orders_working — the
     "Group theo" mode of the Detail-table sub-tab. Never loads the raw row
@@ -598,9 +654,12 @@ def run_grouped_rows_query(
     try:
         where_sql, params = _where_clause(
             from_date, to_date, category, status, warehouse_type, item_group, product_type, sku,
+            sales_channel,
         )
         available = _available_columns(con, parquet_source)
-        _build_orders_working(con, parquet_source, available, combo_source, cashflow_source, master_source)
+        _build_orders_working(
+            con, parquet_source, available, combo_source, cashflow_source, master_source, channel_source,
+        )
         where_sql = _apply_path_filters(where_sql, params, path_filters)
 
         if search:
@@ -641,6 +700,7 @@ def run_export_query(
     search=None, group_by=None, sort=None, sort_dir="asc",
     cashflow_source=None, combo_source=None, master_source=None,
     warehouse_type=None, item_group=None, product_type=None, sku=None,
+    channel_source=None, sales_channel=None,
 ) -> list[dict]:
     """Pulls the ENTIRE result set matching the current filters (no LIMIT/
     OFFSET) for the Excel export — grouped aggregate rows when group_by is
@@ -654,9 +714,12 @@ def run_export_query(
     try:
         where_sql, params = _where_clause(
             from_date, to_date, category, status, warehouse_type, item_group, product_type, sku,
+            sales_channel,
         )
         available = _available_columns(con, parquet_source)
-        _build_orders_working(con, parquet_source, available, combo_source, cashflow_source, master_source)
+        _build_orders_working(
+            con, parquet_source, available, combo_source, cashflow_source, master_source, channel_source,
+        )
 
         if search:
             where_sql += (
