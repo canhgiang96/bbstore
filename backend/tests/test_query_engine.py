@@ -244,11 +244,22 @@ def test_summary_doanh_thu_thuan_is_gmv_when_no_discount_or_voucher(parquet_path
 
 
 def test_summary_nmv_also_nets_out_piship_even_without_fee_columns(parquet_path):
-    # Piship (1.620/order) is computed unconditionally (it doesn't depend on
-    # any mapped fee column) — parquet_path has 6 rows, each its own order,
-    # so NMV must be Doanh thu thuần minus 1.620 x 6, not equal to it.
+    # Piship (1.620/order) doesn't depend on any mapped fee column, but does
+    # NOT apply to "Hủy chưa XK" orders (see
+    # test_summary_piship_excludes_huy_chua_xk) — parquet_path has 6 orders,
+    # one of which (O2) is Hủy chưa XK, so NMV must net out 1.620 x 5.
     result = run_summary_query(parquet_path)
-    assert result["kpis"]["nmv"] == result["kpis"]["doanhThuThuan"] - 1620 * 6
+    assert result["kpis"]["nmv"] == result["kpis"]["doanhThuThuan"] - 1620 * 5
+
+
+def test_summary_piship_excludes_huy_chua_xk(parquet_path):
+    # O2 is "Hủy chưa XK" (cancelled before export) — Piship must not apply
+    # to it, unlike O1 ("Hủy sau XK", cancelled after export) which still
+    # incurs it since shipping already happened.
+    result = run_rows_query(parquet_path, page_size=10)
+    by_order = {r["orderId"]: r for r in result["rows"]}
+    assert by_order["O2"]["piship"] == 0
+    assert by_order["O1"]["piship"] == 1620
 
 
 DISCOUNT_HEADERS = HEADERS + ["Người bán trợ giá", "Mã giảm giá của Shop", "Số tiền người mua thanh toán"]
@@ -810,3 +821,40 @@ def test_export_query_respects_filters(parquet_path):
     rows = run_export_query(parquet_path, category="Áo")
     assert len(rows) == 3
     assert {r["orderId"] for r in rows} == {"O1", "O3", "O5"}
+
+
+# ---- Multi-select filters: status/warehouseType/itemGroup/productType each
+# now accept a list ("any of these values"), not just one exact match.
+
+def test_rows_status_filter_accepts_list_of_values(parquet_path):
+    result = run_rows_query(parquet_path, page_size=10, status=["Hoàn thành", "Đang giao"])
+    assert {r["orderId"] for r in result["rows"]} == {"O5", "O6"}
+
+
+def test_rows_status_filter_still_accepts_single_string(parquet_path):
+    result = run_rows_query(parquet_path, page_size=10, status="Hoàn thành")
+    assert {r["orderId"] for r in result["rows"]} == {"O5"}
+
+
+def test_rows_status_filter_empty_list_means_no_filter(parquet_path):
+    result = run_rows_query(parquet_path, page_size=10, status=[])
+    assert result["total"] == 6
+
+
+def test_rows_warehouse_type_filter_accepts_list_of_values(parquet_path_with_discounts, master_parquet_path):
+    result = run_rows_query(
+        parquet_path_with_discounts, page_size=10, master_source=[master_parquet_path],
+        warehouse_type=["Kho HN", "Kho HCM"],
+    )
+    assert {r["skuVariant"] for r in result["rows"]} == {"A100-1", "B200-1"}
+
+    result_one = run_rows_query(
+        parquet_path_with_discounts, page_size=10, master_source=[master_parquet_path],
+        warehouse_type=["Kho HN"],
+    )
+    assert {r["skuVariant"] for r in result_one["rows"]} == {"A100-1"}
+
+
+def test_summary_status_filter_accepts_list_of_values(parquet_path):
+    result = run_summary_query(parquet_path, status=["Hoàn thành", "Đang giao"])
+    assert result["kpis"]["rowCount"] == 2

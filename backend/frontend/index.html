@@ -81,19 +81,31 @@
         </div>
         <div class="filter-item filter-grow">
           <label>Trạng thái</label>
-          <select id="filterStatus"><option value="">Tất cả</option></select>
+          <details class="multi-select">
+            <summary class="multi-select-summary" id="filterStatusSummary">Tất cả</summary>
+            <div class="multi-select-list" id="filterStatusList"></div>
+          </details>
         </div>
         <div class="filter-item filter-grow">
           <label>Phân loại kho</label>
-          <select id="filterWarehouseType"><option value="">Tất cả</option></select>
+          <details class="multi-select">
+            <summary class="multi-select-summary" id="filterWarehouseTypeSummary">Tất cả</summary>
+            <div class="multi-select-list" id="filterWarehouseTypeList"></div>
+          </details>
         </div>
         <div class="filter-item filter-grow">
           <label>Phân loại mục</label>
-          <select id="filterItemGroup"><option value="">Tất cả</option></select>
+          <details class="multi-select">
+            <summary class="multi-select-summary" id="filterItemGroupSummary">Tất cả</summary>
+            <div class="multi-select-list" id="filterItemGroupList"></div>
+          </details>
         </div>
         <div class="filter-item filter-grow">
           <label>Phân loại sản phẩm</label>
-          <select id="filterProductType"><option value="">Tất cả</option></select>
+          <details class="multi-select">
+            <summary class="multi-select-summary" id="filterProductTypeSummary">Tất cả</summary>
+            <div class="multi-select-list" id="filterProductTypeList"></div>
+          </details>
         </div>
         <div class="filter-item filter-grow">
           <label>SKU</label>
@@ -217,9 +229,9 @@
                   <option value="orderId">Mã đơn hàng</option>
                 </select>
               </div>
-              <details class="col-picker" id="colPicker">
+              <details class="multi-select" id="colPicker">
                 <summary class="btn btn-ghost">Cột hiển thị</summary>
-                <div class="col-picker-list" id="colPickerList"></div>
+                <div class="multi-select-list" id="colPickerList"></div>
               </details>
               <input type="text" id="tableSearch" placeholder="Tìm kiếm..." />
               <button id="btnExportExcel" class="btn btn-primary">⬇ Xuất Excel</button>
@@ -364,8 +376,8 @@
   </div>
 </div>
 
-<script src="js/db.js?v=19"></script>
-<script src="js/api.js?v=19"></script>
-<script src="js/app.js?v=19"></script>
+<script src="js/db.js?v=20"></script>
+<script src="js/api.js?v=20"></script>
+<script src="js/app.js?v=20"></script>
 </body>
 </html>

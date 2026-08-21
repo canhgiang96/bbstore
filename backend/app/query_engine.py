@@ -101,6 +101,19 @@ def _is_empty_source(parquet_source) -> bool:
     return isinstance(parquet_source, (list, tuple)) and len(parquet_source) == 0
 
 
+def _in_clause(column: str, values, params: list):
+    """Builds '"col" IN (?, ?, ...)' from a single value or a list of
+    values, appending the placeholders' params in place. Returns None (no
+    clause) when values is empty/falsy, after dropping any blank entries.
+    """
+    vals = values if isinstance(values, (list, tuple)) else ([values] if values else [])
+    vals = [v for v in vals if v]
+    if not vals:
+        return None
+    params.extend(vals)
+    return f'"{column}" IN ({", ".join(["?"] * len(vals))})'
+
+
 def _where_clause(
     from_date=None, to_date=None, category=None, status=None,
     warehouse_type=None, item_group=None, product_type=None, sku=None,
@@ -122,18 +135,17 @@ def _where_clause(
     if category:
         clauses.append('"category" = ?')
         params.append(category)
-    if status:
-        clauses.append('"trangThai" = ?')
-        params.append(status)
-    if warehouse_type:
-        clauses.append('"phanLoaiKho" = ?')
-        params.append(warehouse_type)
-    if item_group:
-        clauses.append('"phanLoaiMuc" = ?')
-        params.append(item_group)
-    if product_type:
-        clauses.append('"phanLoaiSp" = ?')
-        params.append(product_type)
+    # Each of these accepts either a single value or a list — the Detail-table
+    # filter bar's "Trạng thái"/"Phân loại kho"/"Phân loại mục"/"Phân loại
+    # sản phẩm" pickers are multi-select, so a filter can now mean "any of
+    # these values" (SQL IN), not just one exact match.
+    for column, values in [
+        ("trangThai", status), ("phanLoaiKho", warehouse_type),
+        ("phanLoaiMuc", item_group), ("phanLoaiSp", product_type),
+    ]:
+        in_clause = _in_clause(column, values, params)
+        if in_clause:
+            clauses.append(in_clause)
     if sku:
         clauses.append('(lower("sku") LIKE ? OR lower("skuVariant") LIKE ?)')
         like = f"%{sku.lower()}%"
@@ -285,7 +297,7 @@ def _build_orders_working(
           {discount_col} * {ratio_expr} AS "discount",
           {voucher_col} * {ratio_expr} AS "voucher",
           {platform_fee_col} * {ratio_expr} AS "platformFee",
-          CASE WHEN {slot_expr} IS NULL OR {slot_expr} = 1 THEN {piship_col} ELSE 0 END AS "piship",
+          CASE WHEN ({slot_expr} IS NULL OR {slot_expr} = 1) AND o."trangThai" != 'Hủy chưa XK' THEN {piship_col} ELSE 0 END AS "piship",
           ({aff_expr}) * {ratio_expr} AS "phiAff",
           {warehouse_expr} AS "phanLoaiKho",
           {item_group_expr} AS "phanLoaiMuc",

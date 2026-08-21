@@ -257,17 +257,29 @@ tbody tr:hover { background: var(--primary-soft); }
 .detail-toolbar-controls .filter-item { min-width: 160px; }
 .detail-toolbar-controls input#tableSearch { width: 200px; }
 
-/* Column picker (native <details> popover — no click-outside JS needed) */
-.col-picker { position: relative; }
-.col-picker summary { list-style: none; cursor: pointer; }
-.col-picker summary::-webkit-details-marker { display: none; }
-.col-picker-list {
-  position: absolute; right: 0; top: calc(100% + 6px); z-index: 20;
+/* Multi-select popover (native <details> — no click-outside JS needed).
+   Shared by the column picker (Detail-table toolbar) and the Trạng thái /
+   Phân loại kho / mục / sản phẩm filters, which each let the user pick more
+   than one value at once. */
+.multi-select { position: relative; }
+.multi-select summary { list-style: none; cursor: pointer; }
+.multi-select summary::-webkit-details-marker { display: none; }
+.multi-select-list {
+  position: absolute; left: 0; top: calc(100% + 6px); z-index: 20;
   background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
   box-shadow: var(--shadow); padding: 10px; min-width: 220px; max-height: 320px;
   overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
 }
-.col-picker-list label { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.multi-select-list label { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.multi-select-list .muted { padding: 4px 0; }
+#colPicker .multi-select-list { left: auto; right: 0; }
+
+/* Filter-bar multi-selects (Trạng thái/Phân loại kho/mục/sản phẩm) look
+   like the <select>/<input> they replaced, not a button. */
+.multi-select-summary {
+  display: block; background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; font-size: 14px; color: var(--text); white-space: nowrap;
+}
 
 /* Sortable detail-table headers */
 th.sortable { cursor: pointer; user-select: none; }

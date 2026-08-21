@@ -779,6 +779,13 @@
     expandedGroups: new Map(), // groupValue -> { rows, total, page, pageSize, loading }
     lastDetailResult: null,
     lastDetailGrouped: false,
+    // Multi-select filters — each holds the set of currently-checked values;
+    // an empty Set means "Tất cả" (no filter on that field).
+    selectedStatus: new Set(),
+    selectedWarehouseType: new Set(),
+    selectedItemGroup: new Set(),
+    selectedProductType: new Set(),
+    lastFacets: null, // cached so "Xóa lọc" can redraw the checkbox lists without waiting on a fetch
     filtersWired: false,
     summarySeq: 0,
     detailSeq: 0,
@@ -821,17 +828,15 @@
     const params = new URLSearchParams();
     const from = el("filterFrom").value;
     const to = el("filterTo").value;
-    const status = el("filterStatus").value;
-    const warehouseType = el("filterWarehouseType").value;
-    const itemGroup = el("filterItemGroup").value;
-    const productType = el("filterProductType").value;
     const sku = el("filterSku").value.trim();
     if (from) params.set("from", from);
     if (to) params.set("to", to);
-    if (status) params.set("status", status);
-    if (warehouseType) params.set("warehouseType", warehouseType);
-    if (itemGroup) params.set("itemGroup", itemGroup);
-    if (productType) params.set("productType", productType);
+    // Multi-select — each checked value becomes its own "status="/etc entry
+    // (append, not set) so the backend can match "any of these".
+    dash.selectedStatus.forEach(v => params.append("status", v));
+    dash.selectedWarehouseType.forEach(v => params.append("warehouseType", v));
+    dash.selectedItemGroup.forEach(v => params.append("itemGroup", v));
+    dash.selectedProductType.forEach(v => params.append("productType", v));
     if (sku) params.set("sku", sku);
     Object.entries(extra || {}).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== "") params.set(k, v); });
     return params;
@@ -868,6 +873,33 @@
     try { localStorage.setItem(VISIBLE_COLS_KEY, JSON.stringify([...dash.visibleCols])); } catch (e) { /* storage unavailable */ }
   }
 
+  // Generic multi-select checkbox popover — shared by the 4 filter-bar
+  // pickers (Trạng thái/Phân loại kho/mục/sản phẩm). sortedValues must
+  // already be in display order; entries no longer present in it (e.g. the
+  // facet list changed) are dropped from selectedSet so a stale filter
+  // can't silently keep narrowing results the user can no longer see.
+  function renderMultiSelectFacet(listId, summaryId, selectedSet, sortedValues) {
+    [...selectedSet].forEach(v => { if (!sortedValues.includes(v)) selectedSet.delete(v); });
+    const list = el(listId);
+    list.innerHTML = sortedValues.length
+      ? sortedValues.map(v =>
+          `<label><input type="checkbox" value="${escapeHtml(v)}" ${selectedSet.has(v) ? "checked" : ""}/> ${escapeHtml(v)}</label>`
+        ).join("")
+      : `<div class="muted">Không có giá trị</div>`;
+    list.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+      cb.onchange = () => {
+        if (cb.checked) selectedSet.add(cb.value);
+        else selectedSet.delete(cb.value);
+        updateMultiSelectSummary(summaryId, selectedSet);
+      };
+    });
+    updateMultiSelectSummary(summaryId, selectedSet);
+  }
+
+  function updateMultiSelectSummary(summaryId, selectedSet) {
+    el(summaryId).textContent = selectedSet.size === 0 ? "Tất cả" : `${selectedSet.size} đã chọn`;
+  }
+
   function renderColumnPicker() {
     const list = el("colPickerList");
     list.innerHTML = TABLE_COLS.map(c =>
@@ -895,11 +927,12 @@
     el("btnClearFilter").onclick = () => {
       el("filterFrom").value = "";
       el("filterTo").value = "";
-      el("filterStatus").value = "";
-      el("filterWarehouseType").value = "";
-      el("filterItemGroup").value = "";
-      el("filterProductType").value = "";
+      dash.selectedStatus.clear();
+      dash.selectedWarehouseType.clear();
+      dash.selectedItemGroup.clear();
+      dash.selectedProductType.clear();
       el("filterSku").value = "";
+      if (dash.lastFacets) renderFacets(dash.lastFacets); // redraw checkboxes as unchecked
       applyFiltersAndRender();
     };
     el("tableSearch").oninput = e => {
@@ -973,27 +1006,21 @@
     }
   }
 
-  // Dropdowns are rebuilt from the (unfiltered) summary response each time,
-  // but the user's current selection is preserved if still valid.
+  // Checkbox lists are rebuilt from the (unfiltered) summary response each
+  // time, but the user's current selections are preserved if still valid
+  // (see renderMultiSelectFacet).
   function renderFacets(facets) {
-    const statusSel = el("filterStatus");
-    const curStatus = statusSel.value;
+    dash.lastFacets = facets;
     const STATUS_ORDER = ["Hoàn thành", "Đang giao", "Hoàn 1 phần", "Hoàn hàng", "Hủy chưa XK", "Hủy sau XK"];
-    const statuses = [...facets.statuses].sort((a, b) => STATUS_ORDER.indexOf(a) - STATUS_ORDER.indexOf(b));
-    statusSel.innerHTML = '<option value="">Tất cả</option>' + statuses.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("");
-    if (facets.statuses.includes(curStatus)) statusSel.value = curStatus;
+    const statuses = [...(facets.statuses || [])].sort((a, b) => STATUS_ORDER.indexOf(a) - STATUS_ORDER.indexOf(b));
+    const warehouseTypes = [...(facets.warehouseTypes || [])].sort((a, b) => a.localeCompare(b, "vi"));
+    const itemGroups = [...(facets.itemGroups || [])].sort((a, b) => a.localeCompare(b, "vi"));
+    const productTypes = [...(facets.productTypes || [])].sort((a, b) => a.localeCompare(b, "vi"));
 
-    renderSimpleFacet("filterWarehouseType", facets.warehouseTypes);
-    renderSimpleFacet("filterItemGroup", facets.itemGroups);
-    renderSimpleFacet("filterProductType", facets.productTypes);
-  }
-
-  function renderSimpleFacet(selectId, values) {
-    const sel = el(selectId);
-    const cur = sel.value;
-    const sorted = [...(values || [])].sort((a, b) => a.localeCompare(b, "vi"));
-    sel.innerHTML = '<option value="">Tất cả</option>' + sorted.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join("");
-    if (sorted.includes(cur)) sel.value = cur;
+    renderMultiSelectFacet("filterStatusList", "filterStatusSummary", dash.selectedStatus, statuses);
+    renderMultiSelectFacet("filterWarehouseTypeList", "filterWarehouseTypeSummary", dash.selectedWarehouseType, warehouseTypes);
+    renderMultiSelectFacet("filterItemGroupList", "filterItemGroupSummary", dash.selectedItemGroup, itemGroups);
+    renderMultiSelectFacet("filterProductTypeList", "filterProductTypeSummary", dash.selectedProductType, productTypes);
   }
 
   /* ---- KPIs ---- */
