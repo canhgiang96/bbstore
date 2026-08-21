@@ -462,6 +462,8 @@
     tableSortDir: "asc",
     filtersWired: false,
     charts: {},
+    summarySeq: 0,
+    rowsSeq: 0,
   };
 
   async function refreshDashboard() {
@@ -499,25 +501,23 @@
     const params = new URLSearchParams();
     const from = el("filterFrom").value;
     const to = el("filterTo").value;
-    const category = el("filterCategory").value;
     const status = el("filterStatus").value;
     if (from) params.set("from", from);
     if (to) params.set("to", to);
-    if (category) params.set("category", category);
     if (status) params.set("status", status);
     Object.entries(extra || {}).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== "") params.set(k, v); });
     return params;
   }
 
+  // Filters only apply when the user clicks "Tìm kiếm" (not on every field
+  // change) — this also avoids a race where an earlier, slower request
+  // (e.g. the initial unfiltered load) resolves after a later filtered one
+  // and overwrites it; fetchAndRenderSummary/Rows guard against that too.
   function initDashboardFilters() {
-    el("filterFrom").onchange = () => applyFiltersAndRender();
-    el("filterTo").onchange = () => applyFiltersAndRender();
-    el("filterCategory").onchange = () => applyFiltersAndRender();
-    el("filterStatus").onchange = () => applyFiltersAndRender();
+    el("btnApplyFilter").onclick = () => applyFiltersAndRender();
     el("btnClearFilter").onclick = () => {
       el("filterFrom").value = "";
       el("filterTo").value = "";
-      el("filterCategory").value = "";
       el("filterStatus").value = "";
       applyFiltersAndRender();
     };
@@ -537,14 +537,17 @@
   }
 
   async function fetchAndRenderSummary() {
+    const seq = ++dash.summarySeq;
     const params = currentFilterParams();
     const summary = await API.apiJson(`/api/dashboard/summary?${params.toString()}`);
+    if (seq !== dash.summarySeq) return; // a newer request already superseded this one
     renderKPIs(summary.kpis);
     renderFacets(summary.facets);
     renderCharts(summary);
   }
 
   async function fetchAndRenderRows() {
+    const seq = ++dash.rowsSeq;
     const params = currentFilterParams({
       search: dash.tableSearch,
       sort: dash.tableSort,
@@ -553,17 +556,13 @@
       pageSize: dash.tablePageSize,
     });
     const result = await API.apiJson(`/api/dashboard/rows?${params.toString()}`);
+    if (seq !== dash.rowsSeq) return; // a newer request already superseded this one
     renderTable(result);
   }
 
-  // Facet dropdowns are rebuilt from the (unfiltered) summary response each
+  // Status dropdown is rebuilt from the (unfiltered) summary response each
   // time, but the user's current selection is preserved if still valid.
   function renderFacets(facets) {
-    const catSel = el("filterCategory");
-    const curCat = catSel.value;
-    catSel.innerHTML = '<option value="">Tất cả</option>' + facets.categories.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
-    if (facets.categories.includes(curCat)) catSel.value = curCat;
-
     const statusSel = el("filterStatus");
     const curStatus = statusSel.value;
     const STATUS_ORDER = ["Hoàn thành", "Đang giao", "Hoàn 1 phần", "Hoàn hàng", "Hủy chưa XK", "Hủy sau XK"];
