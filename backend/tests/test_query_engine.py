@@ -674,6 +674,24 @@ def test_summary_loi_nhuan_gop_reconciles_with_nmv_and_gia_von(parquet_path_with
     assert kpis["loiNhuanGop"] == kpis["nmv"] - kpis["giaVon"]
 
 
+def test_summary_gia_von_only_counts_gmv_statuses(parquet_path):
+    # Same status mix as test_summary_kpis_match_expected: O1 (Hủy sau XK,
+    # soLuongThuc 2), O2 (Hủy chưa XK, soLuongThuc 3), O3 (Hoàn hàng,
+    # soLuongThuc 0), O4 (Hoàn 1 phần, soLuongThuc 3), O5 (Hoàn thành,
+    # soLuongThuc 1), O6 (Đang giao, soLuongThuc 2). Giá vốn must only sum
+    # the GMV-status rows (O4, O5, O6), same scope as GMV/discount/voucher —
+    # not the cancelled/fully-returned ones.
+    master_path = _write_master_parquet([
+        {"sku": s, "muc": "X", "phanLoaiSp": "X", "phanLoaiKho": "X", "giaVon": 1000.0}
+        for s in ["A100", "B200", "C300", "D400", "E500", "F600"]
+    ])
+    try:
+        result = run_summary_query(parquet_path, master_source=[master_path])
+        assert result["kpis"]["giaVon"] == (3 + 1 + 2) * 1000  # 6000, not 11000
+    finally:
+        os.remove(master_path)
+
+
 def test_rows_new_filters_narrow_by_master_file_categories_and_sku(
     parquet_path_with_discounts, master_parquet_path,
 ):

@@ -306,7 +306,7 @@ def run_summary_query(
               COALESCE(SUM("platformFee"), 0) AS platform_fee,
               COALESCE(SUM("piship"), 0) AS piship,
               COALESCE(SUM("phiAff"), 0) AS phi_aff,
-              COALESCE(SUM("giaVon"), 0) AS gia_von,
+              COALESCE(SUM(CASE WHEN "trangThai" IN {GMV_STATUSES_SQL} THEN "giaVon" ELSE 0 END), 0) AS gia_von,
               COUNT(*) AS row_count
             FROM orders_working
             WHERE {where_sql}
