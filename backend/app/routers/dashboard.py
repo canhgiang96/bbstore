@@ -36,8 +36,16 @@ async def _all_ready_cashflow_parquet_paths() -> list:
     Orders query at query time for Phí AFF (see query_engine._cashflow_join),
     not at Orders-conversion time, so uploading Dòng tiền later still applies
     to Orders Reports that were converted before it existed.
+
+    Swallows errors (e.g. the cashflow_reports table not existing yet, right
+    after this ships and before the Supabase migration has been run) so the
+    Orders Dashboard itself never breaks because of this — it just degrades
+    to phiAff=0, same as "no cashflow data uploaded yet".
     """
-    reports = await db.pg_select("cashflow_reports", {"status": "eq.ready", "select": "id,parquet_key"})
+    try:
+        reports = await db.pg_select("cashflow_reports", {"status": "eq.ready", "select": "id,parquet_key"})
+    except Exception:  # noqa: BLE001 — Phí AFF is best-effort, never worth 500ing the whole Dashboard for
+        return []
     return [get_local_parquet(r["id"], r["parquet_key"]) for r in reports if r.get("parquet_key")]
 
 
