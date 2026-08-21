@@ -208,7 +208,7 @@ select, input[type="text"], input[type="date"] {
 
 /* KPI */
 .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
-.kpi-grid-5 { grid-template-columns: repeat(5, 1fr); }
+.kpi-grid-6 { grid-template-columns: repeat(6, 1fr); }
 .kpi-card {
   background: var(--surface);
   border: 1px solid var(--border);

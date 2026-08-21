@@ -65,3 +65,26 @@ def derive_row_fields(row: dict, mapping: dict) -> dict:
         "cancelReason": cancel_reason,
         "trangThai": trang_thai,
     }
+
+
+def compute_discount(seller_subsidy: float, quantity: float, so_luong_thuc: float) -> float:
+    """Giảm giá (per unit) = Người bán trợ giá / Số lượng.
+    Giảm giá trên dashboard = Giảm giá x Số lượng thực.
+    """
+    if not quantity:
+        return 0.0
+    return (seller_subsidy / quantity) * so_luong_thuc
+
+
+def compute_voucher(shop_voucher: float, order_paid_ratio: float, quantity: float, so_luong_thuc: float) -> float:
+    """Mã giảm giá của Shop is an order-level amount Shopee repeats on every
+    line of a multi-line order, so it's prorated by order_paid_ratio — this
+    line's share of "Số tiền người mua thanh toán" summed across the whole
+    order (1.0 when the order has only one line).
+
+    Voucher (per unit) = Mã giảm giá của Shop x order_paid_ratio / Số lượng.
+    Voucher trên dashboard = Voucher x Số lượng thực.
+    """
+    if not quantity:
+        return 0.0
+    return (shop_voucher * order_paid_ratio / quantity) * so_luong_thuc

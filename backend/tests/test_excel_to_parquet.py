@@ -119,3 +119,69 @@ def test_mapping_override_missing_date_still_raises():
         assert False, "expected MappingError"
     except MappingError:
         pass
+
+
+DISCOUNT_HEADERS = HEADERS + ["Người bán trợ giá", "Mã giảm giá của Shop", "Số tiền người mua thanh toán"]
+
+DISCOUNT_ROWS = [
+    # MULTI1: 2-line order. Shopee repeats the order-level shop voucher
+    # (10.000) on every line; it must be prorated by each line's share of
+    # "Số tiền người mua thanh toán" (300.000 + 700.000 = 1.000.000 total).
+    ["MULTI1", "2026-02-01 00:01", "Hoàn thành", "", "A100-1", "SP A", 150000, 2, 0, 4000, 10000, 300000],
+    ["MULTI1", "2026-02-01 00:01", "Hoàn thành", "", "B200-1", "SP B", 700000, 1, 0, 6000, 10000, 700000],
+    # SINGLE1: 1-line order -> ratio must be exactly 100%.
+    ["SINGLE1", "2026-02-02 09:00", "Hoàn thành", "", "C300-1", "SP C", 50000, 1, 0, 1000, 5000, 50000],
+]
+
+
+def make_discount_xlsx_bytes():
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "orders"
+    ws.append(DISCOUNT_HEADERS)
+    for r in DISCOUNT_ROWS:
+        ws.append(r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
+def test_discount_and_voucher_prorated_across_multi_line_order():
+    parquet_bytes, row_count, mapping = excel_to_parquet(make_discount_xlsx_bytes())
+    assert row_count == 3
+    assert mapping["sellerSubsidy"] == "Người bán trợ giá"
+    assert mapping["shopVoucher"] == "Mã giảm giá của Shop"
+    assert mapping["buyerPaidAmount"] == "Số tiền người mua thanh toán"
+
+    df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
+
+    line1 = df[(df["orderId"] == "MULTI1") & (df["skuVariant"] == "A100-1")].iloc[0]
+    line2 = df[(df["orderId"] == "MULTI1") & (df["skuVariant"] == "B200-1")].iloc[0]
+    single = df[df["orderId"] == "SINGLE1"].iloc[0]
+
+    # discount = (Người bán trợ giá / Số lượng) x Số lượng thực — no returns
+    # here so Số lượng thực == Số lượng.
+    assert line1["discount"] == 4000 / 2 * 2
+    assert line2["discount"] == 6000 / 1 * 1
+
+    # line1 is 300.000/1.000.000 = 30% of the order's paid amount; line2 is 70%.
+    assert line1["voucher"] == 10000 * 0.3 / 2 * 2
+    assert line2["voucher"] == 10000 * 0.7 / 1 * 1
+
+    # Single-line order -> ratio is exactly 100%, so voucher == the shop's
+    # full voucher value for that line (no proration needed).
+    assert single["voucher"] == 5000
+    assert single["discount"] == 1000
+
+
+def test_discount_and_voucher_default_to_zero_when_columns_absent():
+    # Existing Reports converted before this feature has no "Người bán trợ
+    # giá" / "Mã giảm giá của Shop" / "Số tiền người mua thanh toán"
+    # columns — must not error, discount/voucher should just be 0.
+    parquet_bytes, row_count, mapping = excel_to_parquet(make_xlsx_bytes())
+    assert "sellerSubsidy" not in mapping
+    assert "shopVoucher" not in mapping
+    df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
+    assert (df["discount"] == 0).all()
+    assert (df["voucher"] == 0).all()

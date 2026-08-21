@@ -583,6 +583,7 @@
   function renderKPIs(kpis) {
     el("kpiDoanhSo").textContent = fmtNumber(kpis.doanhSo);
     el("kpiDoanhSoThuan").textContent = fmtNumber(kpis.gmv);
+    el("kpiNmv").textContent = fmtNumber(kpis.nmv);
     el("kpiHuyChuaXK").textContent = fmtNumber(kpis.huyChuaXK);
     el("kpiHuySauXK").textContent = fmtNumber(kpis.huySauXK);
     el("kpiHoan").textContent = fmtNumber(kpis.hoan);
@@ -662,6 +663,8 @@
     { key: "returnedQty", label: "SL hoàn trả", fmt: v => Number(v).toLocaleString("vi-VN") },
     { key: "soLuongThuc", label: "SL thực", fmt: v => Number(v).toLocaleString("vi-VN") },
     { key: "doanhSo", label: "Doanh số", fmt: v => fmtNumber(v) },
+    { key: "discount", label: "Giảm giá", fmt: v => fmtNumber(v) },
+    { key: "voucher", label: "Voucher", fmt: v => fmtNumber(v) },
     { key: "trangThai", label: "Trạng thái" },
   ];
 

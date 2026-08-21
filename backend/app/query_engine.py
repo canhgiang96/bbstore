@@ -19,7 +19,7 @@ from .config import get_settings
 DETAIL_COLUMNS = [
     "date", "orderId", "sku", "skuVariant", "product", "category", "customer",
     "quantity", "returnedQty", "soLuongThuc", "price", "originalPrice",
-    "revenue", "doanhSo", "status", "trangThai",
+    "revenue", "doanhSo", "status", "trangThai", "discount", "voucher",
 ]
 
 ALLOWED_SORT_COLUMNS = {
@@ -31,7 +31,7 @@ GMV_STATUSES_SQL = "('Hoàn thành', 'Đang giao')"
 HOAN_STATUSES_SQL = "('Hoàn hàng', 'Hoàn 1 phần')"
 
 EMPTY_SUMMARY = {
-    "kpis": {"doanhSo": 0, "gmv": 0, "huyChuaXK": 0, "huySauXK": 0, "hoan": 0, "rowCount": 0},
+    "kpis": {"doanhSo": 0, "gmv": 0, "huyChuaXK": 0, "huySauXK": 0, "hoan": 0, "nmv": 0, "rowCount": 0},
     "timeline": [],
     "topProducts": [],
     "categoryBreakdown": [],
@@ -96,6 +96,19 @@ def _where_clause(from_date=None, to_date=None, category=None, status=None):
     return (" AND ".join(clauses) if clauses else "1=1"), params
 
 
+def _available_columns(con, parquet_source) -> set:
+    """Reports converted before "discount"/"voucher" existed don't have
+    those columns in their Parquet schema. union_by_name=true lets DuckDB
+    read a set of Reports with differing schemas together (missing columns
+    come back NULL) — but only when there's at least one file that DOES
+    have the column; a lone old-schema Report still needs the caller to
+    fall back to a literal 0, hence checking availability up front instead
+    of just always referencing the column name.
+    """
+    cur = con.execute("SELECT * FROM read_parquet(?, union_by_name=true) LIMIT 0", [parquet_source])
+    return {d[0] for d in cur.description}
+
+
 def run_summary_query(parquet_source, from_date=None, to_date=None, category=None, status=None) -> dict:
     if _is_empty_source(parquet_source):
         return EMPTY_SUMMARY
@@ -103,6 +116,9 @@ def run_summary_query(parquet_source, from_date=None, to_date=None, category=Non
     con = _connect()
     try:
         where_sql, params = _where_clause(from_date, to_date, category, status)
+        available = _available_columns(con, parquet_source)
+        discount_col = 'COALESCE("discount", 0)' if "discount" in available else "0"
+        voucher_col = 'COALESCE("voucher", 0)' if "voucher" in available else "0"
 
         totals_sql = f"""
             SELECT
@@ -111,16 +127,17 @@ def run_summary_query(parquet_source, from_date=None, to_date=None, category=Non
               COALESCE(SUM(CASE WHEN "trangThai" = 'Hủy chưa XK' THEN "doanhSo" ELSE 0 END), 0) AS huy_chua_xk,
               COALESCE(SUM(CASE WHEN "trangThai" = 'Hủy sau XK' THEN "doanhSo" ELSE 0 END), 0) AS huy_sau_xk,
               COALESCE(SUM(CASE WHEN "trangThai" IN {HOAN_STATUSES_SQL} THEN "doanhSo" ELSE 0 END), 0) AS hoan,
+              COALESCE(SUM(CASE WHEN "trangThai" IN {GMV_STATUSES_SQL} THEN "doanhSo" - {discount_col} - {voucher_col} ELSE 0 END), 0) AS nmv,
               COUNT(*) AS row_count
-            FROM read_parquet(?) WHERE {where_sql}
+            FROM read_parquet(?, union_by_name=true) WHERE {where_sql}
         """
-        total, gmv, huy_chua_xk, huy_sau_xk, hoan, row_count = con.execute(
+        total, gmv, huy_chua_xk, huy_sau_xk, hoan, nmv, row_count = con.execute(
             totals_sql, [parquet_source, *params]
         ).fetchone()
 
         timeline_sql = f"""
             SELECT strftime("date", '%Y-%m') AS month, SUM("doanhSo") AS value
-            FROM read_parquet(?) WHERE {where_sql}
+            FROM read_parquet(?, union_by_name=true) WHERE {where_sql}
             GROUP BY month ORDER BY month
         """
         timeline = con.execute(timeline_sql, [parquet_source, *params]).fetchall()
@@ -128,7 +145,7 @@ def run_summary_query(parquet_source, from_date=None, to_date=None, category=Non
         def top_n(column: str, n: int = 8):
             sql = f"""
                 SELECT "{column}" AS label, SUM("doanhSo") AS value
-                FROM read_parquet(?) WHERE {where_sql}
+                FROM read_parquet(?, union_by_name=true) WHERE {where_sql}
                 GROUP BY label ORDER BY value DESC LIMIT {n}
             """
             return con.execute(sql, [parquet_source, *params]).fetchall()
@@ -143,7 +160,7 @@ def run_summary_query(parquet_source, from_date=None, to_date=None, category=Non
             SELECT
               list(DISTINCT "category") AS categories,
               list(DISTINCT "trangThai") AS statuses
-            FROM read_parquet(?)
+            FROM read_parquet(?, union_by_name=true)
         """
         categories, statuses = con.execute(facets_sql, [parquet_source]).fetchone()
 
@@ -154,6 +171,7 @@ def run_summary_query(parquet_source, from_date=None, to_date=None, category=Non
                 "huyChuaXK": huy_chua_xk,
                 "huySauXK": huy_sau_xk,
                 "hoan": hoan,
+                "nmv": nmv,
                 "rowCount": row_count,
             },
             "timeline": [{"month": m, "value": v} for m, v in timeline],
@@ -181,6 +199,7 @@ def run_rows_query(
     con = _connect()
     try:
         where_sql, params = _where_clause(from_date, to_date, category, status)
+        available = _available_columns(con, parquet_source)
 
         if search:
             where_sql += (
@@ -192,7 +211,8 @@ def run_rows_query(
             params.extend([like] * 6)
 
         total = con.execute(
-            f'SELECT COUNT(*) FROM read_parquet(?) WHERE {where_sql}', [parquet_source, *params]
+            f'SELECT COUNT(*) FROM read_parquet(?, union_by_name=true) WHERE {where_sql}',
+            [parquet_source, *params],
         ).fetchone()[0]
 
         # Column/direction are whitelisted, not parameterized — DuckDB can't
@@ -201,10 +221,15 @@ def run_rows_query(
         sort_dir_sql = "DESC" if str(sort_dir).lower() == "desc" else "ASC"
         offset = (page - 1) * page_size
 
-        cols_sql = ", ".join(f'"{c}"' for c in DETAIL_COLUMNS)
+        def col_expr(c: str) -> str:
+            if c in ("discount", "voucher"):
+                return f'COALESCE("{c}", 0) AS "{c}"' if c in available else f'CAST(0 AS DOUBLE) AS "{c}"'
+            return f'"{c}"'
+
+        cols_sql = ", ".join(col_expr(c) for c in DETAIL_COLUMNS)
         rows_sql = f"""
             SELECT {cols_sql}
-            FROM read_parquet(?) WHERE {where_sql}
+            FROM read_parquet(?, union_by_name=true) WHERE {where_sql}
             ORDER BY "{sort_col}" {sort_dir_sql}
             LIMIT ? OFFSET ?
         """

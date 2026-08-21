@@ -15,7 +15,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .derive import derive_row_fields
+from .derive import compute_discount, compute_voucher, derive_row_fields
 from .mapping import detect_mapping
 from .parsing import parse_date_value, to_number
 
@@ -54,8 +54,28 @@ def _text_or_empty(row: dict, mapping: dict, field_key: str) -> str:
     return str(v).strip() if v is not None else ""
 
 
+def _order_paid_totals(raw_rows: list[dict], mapping: dict) -> dict:
+    """Sums "Số tiền người mua thanh toán" per Mã đơn hàng across every raw
+    row (before date-filtering) — the denominator used to prorate the
+    order-level "Mã giảm giá của Shop" voucher fairly across an order's
+    lines by each line's share of what the buyer actually paid.
+    """
+    order_col = mapping.get("orderId")
+    paid_col = mapping.get("buyerPaidAmount")
+    totals: dict = {}
+    if not order_col or not paid_col:
+        return totals
+    for row in raw_rows:
+        order_id = row.get(order_col)
+        totals[order_id] = totals.get(order_id, 0.0) + to_number(row.get(paid_col))
+    return totals
+
+
 def build_dashboard_rows(raw_rows: list[dict], mapping: dict) -> list[dict]:
     date_col = mapping.get("date")
+    order_col = mapping.get("orderId")
+    paid_col = mapping.get("buyerPaidAmount")
+    order_paid_totals = _order_paid_totals(raw_rows, mapping)
     out = []
 
     for row in raw_rows:
@@ -71,6 +91,15 @@ def build_dashboard_rows(raw_rows: list[dict], mapping: dict) -> list[dict]:
             revenue = price * derived["quantity"]
         if revenue is None:
             revenue = 0.0
+
+        seller_subsidy = to_number(row.get(mapping["sellerSubsidy"])) if mapping.get("sellerSubsidy") else 0.0
+        shop_voucher = to_number(row.get(mapping["shopVoucher"])) if mapping.get("shopVoucher") else 0.0
+        order_total_paid = order_paid_totals.get(row.get(order_col)) if order_col else None
+        line_paid = to_number(row.get(paid_col)) if paid_col else 0.0
+        order_paid_ratio = (line_paid / order_total_paid) if order_total_paid else 0.0
+
+        discount = compute_discount(seller_subsidy, derived["quantity"], derived["soLuongThuc"])
+        voucher = compute_voucher(shop_voucher, order_paid_ratio, derived["quantity"], derived["soLuongThuc"])
 
         out.append({
             "date": date,
@@ -89,6 +118,8 @@ def build_dashboard_rows(raw_rows: list[dict], mapping: dict) -> list[dict]:
             "soLuongThuc": derived["soLuongThuc"],
             "doanhSo": derived["doanhSo"],
             "trangThai": derived["trangThai"],
+            "discount": discount,
+            "voucher": voucher,
         })
 
     return out
