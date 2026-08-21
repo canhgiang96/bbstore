@@ -92,8 +92,8 @@
   async function apiJson(path, options = {}) {
     const res = await apiFetch(path, options);
     if (!res.ok) {
-      // TEMP DEBUG: include a snippet of the raw body (even non-JSON, e.g.
-      // an infra-level HTML error page) so the real cause is visible.
+      // Falls back to a raw-body snippet when there's no JSON "detail" —
+      // covers infra-level error pages (e.g. a gateway timeout) too.
       const raw = await res.text().catch(() => "");
       let detail;
       try { detail = JSON.parse(raw).detail; } catch (e) { /* not JSON */ }

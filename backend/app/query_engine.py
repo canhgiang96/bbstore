@@ -76,7 +76,10 @@ def _where_clause(from_date=None, to_date=None, category=None, status=None):
     clauses = []
     params: list = []
     if from_date:
-        clauses.append('"date" >= ?')
+        # Explicit CAST — DuckDB rejects an implicit TIMESTAMP/VARCHAR
+        # comparison here (BinderException), even though the mirrored
+        # to_date clause below apparently gets inferred fine on its own.
+        clauses.append('"date" >= CAST(? AS DATE)')
         params.append(from_date)
     if to_date:
         # to_date arrives as a plain "YYYY-MM-DD" (from <input type="date">),

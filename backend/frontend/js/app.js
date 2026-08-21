@@ -532,11 +532,6 @@
 
   function applyFiltersAndRender() {
     dash.tablePage = 1;
-    // TEMP DEBUG — shows the raw input values read at the moment of click.
-    const debugClickEl = el("dashboardFilterDebugClick");
-    if (debugClickEl) {
-      debugClickEl.textContent = `[debug-click] Bấm Tìm kiếm lúc ${new Date().toLocaleTimeString("vi-VN")} — filterFrom.value="${el("filterFrom").value}", filterTo.value="${el("filterTo").value}", filterStatus.value="${el("filterStatus").value}"`;
-    }
     fetchAndRenderSummary();
     fetchAndRenderRows();
   }
@@ -544,21 +539,14 @@
   async function fetchAndRenderSummary() {
     const seq = ++dash.summarySeq;
     const params = currentFilterParams();
-    const debugEl = el("dashboardFilterDebug");
     try {
       const summary = await API.apiJson(`/api/dashboard/summary?${params.toString()}`);
       if (seq !== dash.summarySeq) return; // a newer request already superseded this one
       renderKPIs(summary.kpis);
       renderFacets(summary.facets);
       renderCharts(summary);
-      // TEMP DEBUG — remove once the filter issue is confirmed fixed.
-      if (debugEl) {
-        debugEl.textContent = `[debug] gửi: /api/dashboard/summary?${params.toString()} → server trả về ${summary.kpis.rowCount} dòng, doanhSo=${summary.kpis.doanhSo}`;
-      }
     } catch (err) {
-      if (debugEl) {
-        debugEl.textContent = `[debug-error] /api/dashboard/summary?${params.toString()} → LỖI: ${err.message}`;
-      }
+      console.error("Dashboard summary fetch failed:", err);
     }
   }
 
@@ -576,10 +564,7 @@
       if (seq !== dash.rowsSeq) return; // a newer request already superseded this one
       renderTable(result);
     } catch (err) {
-      const debugEl = el("dashboardFilterDebug");
-      if (debugEl) {
-        debugEl.textContent += ` | [debug-error rows] ${err.message}`;
-      }
+      console.error("Dashboard rows fetch failed:", err);
     }
   }
 
