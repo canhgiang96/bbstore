@@ -1,8 +1,10 @@
 # 📊 Dashboard Kinh Doanh
 
-Trang web tổng hợp dữ liệu kinh doanh từ nhiều file Excel (đơn hàng, master file, combo, dòng tiền, điều chỉnh doanh thu) và tạo báo cáo dashboard — chạy hoàn toàn trên trình duyệt, không cần server. Dữ liệu được lưu lại trong trình duyệt (IndexedDB) nên vẫn còn khi bạn đóng và mở lại trang.
+Trang web tổng hợp dữ liệu kinh doanh từ nhiều file Excel (đơn hàng, master file, combo, dòng tiền, điều chỉnh doanh thu) và tạo báo cáo dashboard.
 
-**Demo trực tuyến:** _(cập nhật link GitHub Pages sau khi publish)_
+> **⚠️ Đang chuyển sang kiến trúc mới (Giai đoạn 2).** Thư mục [`backend/`](backend/README.md) là bản kế tiếp — có server thật (FastAPI + Supabase + Cloudflare R2), đăng nhập theo tài khoản, Admin upload xong thì B/C/D xem được ngay trên máy khác không cần thao tác thủ công. Phần còn lại của README này (`index.html`/`css/`/`js/` ở gốc repo) là bản Giai đoạn 1 — 100% chạy trong trình duyệt, IndexedDB, publish thủ công qua GitHub Pages — vẫn đang chạy thật cho tới khi bản Giai đoạn 2 deploy xong và được xác nhận hoạt động đúng, sau đó các file này sẽ được gỡ bỏ. Xem [`backend/README.md`](backend/README.md) để deploy/vận hành bản mới.
+
+**Demo trực tuyến (Giai đoạn 1, sẽ ngừng dùng):** _(cập nhật link GitHub Pages sau khi publish)_
 
 ## Tính năng
 
