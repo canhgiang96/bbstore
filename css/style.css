@@ -138,6 +138,9 @@ body {
 
 /* Mapping banner + grid (also reused inside the mapping-override modal) */
 .mapping-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; padding: 14px 20px; }
+.report-picker-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; padding: 14px 20px; }
+.report-picker-bar label { font-weight: 600; font-size: 13.5px; white-space: nowrap; }
+.report-picker-bar select { flex: 1; min-width: 0; }
 .mapping-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 20px; margin-top: 10px; }
 .mapping-field { display: flex; flex-direction: column; gap: 6px; }
 .mapping-field label { font-size: 13px; font-weight: 600; color: var(--text-muted); }
@@ -160,7 +163,10 @@ body {
 .file-batch-row:last-child { border-bottom: none; }
 .file-batch-name { font-weight: 600; font-size: 13.5px; word-break: break-all; }
 .file-batch-row .muted { white-space: nowrap; }
-.file-batch-row button { margin-left: auto; flex-shrink: 0; }
+.file-batch-row > button { margin-left: auto; flex-shrink: 0; }
+
+.report-row { justify-content: space-between; flex-wrap: wrap; padding: 12px 0; }
+.report-row-main { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 
 /* Modal */
 .modal-overlay {

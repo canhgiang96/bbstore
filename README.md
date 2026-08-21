@@ -7,6 +7,7 @@ Trang web tổng hợp dữ liệu kinh doanh từ nhiều file Excel (đơn hà
 ## Tính năng
 
 **Dashboard**
+- **Mỗi file Excel tải lên ở tab Đơn hàng là 1 Report độc lập** — dropdown "Report đang xem" chọn Report nào, Dashboard chỉ tính KPI/biểu đồ/bảng trên riêng dữ liệu của Report đó, không gộp chung với các Report khác
 - Tự động nhận diện các cột: Ngày, Sản phẩm, Danh mục, Khách hàng, Số lượng, Đơn giá, Giá gốc, Doanh thu, Trạng thái đơn hàng, Lý do hủy, SL sản phẩm hoàn trả, Mã đơn hàng, SKU phân loại hàng
 - Nút "Chỉnh cột ⚙️" để ghi đè nhận diện tự động khi cần
 - **Cột tự tính:**
@@ -22,7 +23,8 @@ Trang web tổng hợp dữ liệu kinh doanh từ nhiều file Excel (đơn hà
 **Quản lý dữ liệu (5 tab riêng: Đơn hàng, Master File, Combo, Dòng tiền, Điều chỉnh doanh thu)**
 - Upload file `.xlsx`, `.xls`, `.csv` (kéo thả hoặc chọn file) — dữ liệu được lưu vào IndexedDB của trình duyệt
 - Với Master File / Combo / Dòng tiền: tải lên lại sẽ **cập nhật** dòng có khóa trùng (SKU phân loại / SKU COMBO / Mã đơn hàng) thay vì tạo trùng lặp
-- Mỗi lần upload được nhóm theo tên file trong mục **"Theo file đã tải lên"** — xem số dòng/thời gian và **xóa cả file đó** chỉ với 1 click, không cần xóa từng dòng
+- Tab **Đơn hàng** hiển thị danh sách **Report** (mỗi lần upload = 1 Report), mỗi Report có nút riêng: **Xuất báo cáo** (chỉ xuất dữ liệu của Report đó) và **Xóa Report này**
+- Các tab còn lại nhóm theo tên file trong mục "Theo file đã tải lên" — xóa cả file đó chỉ với 1 click
 - Thêm dòng thủ công, sửa từng dòng, xóa từng dòng, hoặc xóa toàn bộ dữ liệu một loại
 - Tìm kiếm và phân trang trên mỗi bảng dữ liệu
 
@@ -55,16 +57,24 @@ Không bắt buộc phải có đủ tất cả các cột — chỉ cần cột
 
 Dữ liệu lưu trong IndexedDB chỉ tồn tại **trên trình duyệt/máy hiện tại** — mở trang bằng trình duyệt khác hoặc máy khác sẽ không thấy dữ liệu cũ. Đây chưa phải nơi ghép nối (join) dữ liệu giữa 5 loại file để tính lợi nhuận thực — phần đó sẽ được bổ sung sau khi có công thức tính toán cụ thể.
 
-## Cho máy khác xem Dashboard (publish báo cáo)
+## Cho máy khác xem Dashboard (publish Report)
 
-Trang là static site nên không tự đồng bộ dữ liệu giữa các máy theo thời gian thực. Để máy khác xem được Dashboard:
+Trang là static site nên không tự đồng bộ dữ liệu giữa các máy theo thời gian thực — Admin phải chủ động "publish" từng Report. Quy trình:
 
-1. Trên máy có dữ liệu (đã upload ở tab **Đơn hàng**), vào tab **Dashboard**, bấm **📤 Xuất báo cáo** — tải về file `orders.json`.
-2. Đặt file này vào `data/orders.json` trong thư mục dự án, rồi commit + push lên GitHub (hoặc gửi file cho Claude để publish giúp).
-3. Sau khi GitHub Pages deploy xong, bất kỳ máy nào **chưa có dữ liệu cục bộ** mở trang sẽ tự động thấy Dashboard dựa trên báo cáo đã publish (banner hiển thị "📡 Đang xem báo cáo đã publish lúc ..."), ở chế độ chỉ xem.
-4. Máy nào **đã có dữ liệu riêng** trong IndexedDB vẫn luôn ưu tiên xem dữ liệu cục bộ của máy đó (không bị ghi đè bởi báo cáo đã publish).
+1. Trên máy Admin (đã upload Excel ở tab **Đơn hàng**), tìm Report cần publish — trong danh sách Report ở tab Đơn hàng, hoặc chọn đúng Report đó trong dropdown **"Report đang xem"** ở tab Dashboard — rồi bấm **Xuất báo cáo**. File tải về tên theo Report (vd `01082026.json`), gồm dữ liệu + cấu hình cột đã nhận diện của riêng Report đó.
+2. Gửi file này cho Claude (hoặc tự làm nếu quen với git): thêm vào `data/reports/<tên-file>.json`, cập nhật `data/reports/index.json` (mảng liệt kê `id`, `name`, `uploadedAt`, `rowCount`, `file`), rồi commit + push.
+3. Sau khi GitHub Pages deploy xong, bất kỳ máy nào **chưa có dữ liệu cục bộ** mở trang sẽ thấy dropdown "Report đang xem" liệt kê tất cả Report đã publish — B/C/D tự chọn Report muốn xem, mỗi lần chọn chỉ tải đúng dữ liệu Report đó (không tải hết mọi Report cùng lúc).
+4. Máy nào **đã có dữ liệu riêng** trong IndexedDB vẫn luôn ưu tiên xem Report cục bộ của máy đó, không bị ghi đè bởi các Report đã publish.
 
-Mỗi lần dữ liệu đơn hàng thay đổi và muốn cập nhật cho người xem khác, lặp lại bước 1–2.
+Cấu trúc thư mục `data/reports/`:
+```
+data/reports/
+  index.json        ← danh sách Report đã publish
+  01082026.json      ← dữ liệu + mapping của từng Report
+  08082026.json
+```
+
+Mỗi khi có Report mới muốn công khai, lặp lại bước 1–2 cho Report đó — các Report cũ đã publish không cần đụng tới.
 
 ## Deploy lên GitHub Pages
 

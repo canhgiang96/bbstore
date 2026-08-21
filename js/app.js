@@ -78,6 +78,75 @@
   const UNTAGGED_BATCH_LABEL = "(Thêm thủ công / không rõ nguồn)";
   function batchLabel(row) { return row.__sourceFile || UNTAGGED_BATCH_LABEL; }
 
+  // Every Orders upload is its own independent Report (reportId = its upload
+  // timestamp). Rows without one (added manually, or from before this feature)
+  // fall into a single synthetic "legacy" report so nothing is silently dropped.
+  const LEGACY_REPORT_ID = "__legacy__";
+  function groupOrdersByReport(allRows) {
+    const groups = new Map();
+    allRows.forEach(({ key, value }) => {
+      const reportId = value.__reportId || LEGACY_REPORT_ID;
+      if (!groups.has(reportId)) {
+        groups.set(reportId, {
+          reportId,
+          name: reportId === LEGACY_REPORT_ID ? UNTAGGED_BATCH_LABEL : (value.__sourceFile || reportId),
+          uploadedAt: value.__uploadedAt || null,
+          rowCount: 0,
+          keys: [],
+        });
+      }
+      const g = groups.get(reportId);
+      g.rowCount++;
+      g.keys.push(key);
+    });
+    return Array.from(groups.values()).sort((a, b) => (b.uploadedAt || "").localeCompare(a.uploadedAt || ""));
+  }
+
+  function downloadJSON(obj, filename) {
+    const blob = new Blob([JSON.stringify(obj)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function safeFileName(name) {
+    return String(name).replace(/\.(xlsx|xls|csv)$/i, "").replace(/[^\w\-. ]+/g, "_").trim() || "report";
+  }
+
+  const REPORT_EXPORT_LOG_KEY = "bbstore_report_export_log";
+  function loadReportExportLog() {
+    try { return JSON.parse(localStorage.getItem(REPORT_EXPORT_LOG_KEY) || "{}"); }
+    catch { return {}; }
+  }
+  function saveReportExportLog(log) { localStorage.setItem(REPORT_EXPORT_LOG_KEY, JSON.stringify(log)); }
+
+  // Exports one Report's rows + resolved column mapping as a JSON file, for the
+  // user to send along so it can be committed under data/reports/ and published.
+  async function exportReportById(reportId) {
+    const allRows = await DB.getAllWithKeys("orders");
+    const reportRows = allRows.filter(({ value }) => (value.__reportId || LEGACY_REPORT_ID) === reportId);
+    if (!reportRows.length) { alert("Không tìm thấy dữ liệu của Report này."); return null; }
+
+    const headers = inferColumns(reportRows);
+    const auto = detectMapping(headers);
+    const override = loadMappingOverride();
+    const mapping = {};
+    FIELDS.forEach(f => { mapping[f.key] = override ? (override[f.key] || "") : (auto[f.key] || ""); });
+
+    const name = reportRows[0].value.__sourceFile || reportId;
+    const uploadedAt = reportRows[0].value.__uploadedAt || reportId;
+    const payload = { reportId, name, uploadedAt, mapping, rows: reportRows.map(r => r.value) };
+
+    downloadJSON(payload, safeFileName(name) + ".json");
+    const log = loadReportExportLog();
+    log[reportId] = new Date().toISOString();
+    saveReportExportLog(log);
+    return payload;
+  }
+
   /* ================= Orders column detection (for the Dashboard) ================= */
   const FIELDS = [
     { key: "date", label: "Ngày", required: true },
@@ -215,10 +284,15 @@
         <input type="file" id="file-${storeKey}" accept=".xlsx,.xls,.csv" hidden />
         <div class="import-summary" id="importSummary-${storeKey}"></div>
       </div>
+      ${storeKey === "orders" ? `
+      <div class="card file-batches" id="reportsPanel-orders" hidden>
+        <h3>Report (mỗi file tải lên là 1 Report độc lập)</h3>
+        <div id="reportsList-orders"></div>
+      </div>` : `
       <div class="card file-batches" id="fileBatches-${storeKey}" hidden>
         <h3>Theo file đã tải lên</h3>
         <div id="fileBatchList-${storeKey}"></div>
-      </div>
+      </div>`}
       <div class="data-toolbar">
         <button class="btn btn-primary btn-sm" id="btnAdd-${storeKey}">+ Thêm dòng</button>
         <button class="btn btn-danger btn-sm" id="btnClearAll-${storeKey}">Xóa tất cả</button>
@@ -294,11 +368,19 @@
         let rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
         if (meta.headers) rows = rows.map(r => normalizeRowHeaders(r, meta.headers));
         const uploadedAt = new Date().toISOString();
-        rows = rows.map(r => ({ ...r, __sourceFile: file.name, __uploadedAt: uploadedAt }));
+        rows = rows.map(r => ({
+          ...r,
+          __sourceFile: file.name,
+          __uploadedAt: uploadedAt,
+          ...(storeKey === "orders" ? { __reportId: uploadedAt } : {}),
+        }));
         const n = await DB.bulkPut(storeKey, rows);
         showImportSummary(storeKey, `Đã nhập ${n.toLocaleString("vi-VN")} dòng từ "${file.name}" (sheet: ${wb.SheetNames[0]}).`, true);
         await refreshDataManager(storeKey);
-        if (storeKey === "orders") refreshDashboard();
+        if (storeKey === "orders") {
+          dash.selectedReportId = uploadedAt; // jump the Dashboard to the Report just uploaded
+          refreshDashboard();
+        }
       } catch (err) {
         showImportSummary(storeKey, "Lỗi đọc file: " + err.message, false);
       }
@@ -319,8 +401,53 @@
     st.all = rows;
     st.columns = meta.headers || inferColumns(rows);
     el("count-" + storeKey).textContent = `${rows.length.toLocaleString("vi-VN")} dòng`;
-    renderFileBatches(storeKey);
+    if (storeKey === "orders") renderReportsList(); else renderFileBatches(storeKey);
     applyManagerSearch(storeKey);
+  }
+
+  function renderReportsList() {
+    const st = managerState.orders;
+    const reports = groupOrdersByReport(st.all);
+    const box = el("reportsPanel-orders");
+    if (!reports.length) { box.hidden = true; return; }
+    box.hidden = false;
+
+    const exportLog = loadReportExportLog();
+    const list = el("reportsList-orders");
+    list.innerHTML = reports.map(r => {
+      const when = r.uploadedAt ? new Date(r.uploadedAt).toLocaleString("vi-VN") : "";
+      const exportedAt = exportLog[r.reportId];
+      const badge = exportedAt
+        ? `<span class="pill good">Đã xuất lúc ${escapeHtml(new Date(exportedAt).toLocaleString("vi-VN"))}</span>`
+        : `<span class="pill warn">Chưa xuất</span>`;
+      return `<div class="file-batch-row report-row">
+        <div class="report-row-main">
+          <span class="file-batch-name">${escapeHtml(r.name)}</span>
+          <span class="muted">${r.rowCount.toLocaleString("vi-VN")} dòng${when ? " · " + when : ""}</span>
+          ${badge}
+        </div>
+        <div class="row-actions">
+          <button class="btn btn-ghost btn-sm" data-action="export" data-id="${escapeHtml(r.reportId)}">Xuất báo cáo</button>
+          <button class="btn btn-danger btn-sm" data-action="delete" data-id="${escapeHtml(r.reportId)}">Xóa Report này</button>
+        </div>
+      </div>`;
+    }).join("");
+
+    list.querySelectorAll("button[data-action='export']").forEach(btn => {
+      btn.onclick = async () => {
+        await exportReportById(btn.dataset.id);
+        renderReportsList();
+      };
+    });
+    list.querySelectorAll("button[data-action='delete']").forEach(btn => {
+      btn.onclick = async () => {
+        const report = reports.find(r => r.reportId === btn.dataset.id);
+        if (!confirm(`Xóa toàn bộ Report "${report.name}"? Hành động này không thể hoàn tác.`)) return;
+        for (const key of report.keys) await DB.delete("orders", key);
+        await refreshDataManager("orders");
+        refreshDashboard();
+      };
+    });
   }
 
   function renderFileBatches(storeKey) {
@@ -467,41 +594,84 @@
     pageSize: 15,
     search: "",
     charts: {},
+    reports: [],
+    selectedReportId: null,
+    source: "local",
+    publishedAt: null,
+    publishedMapping: null,
   };
 
-  // A machine with no local data falls back to the last snapshot published via
-  // "Xuất báo cáo" (see wireSnapshotExport) and committed to data/orders.json —
-  // this is how other devices get to view the dashboard on a static, no-backend site.
-  const SNAPSHOT_URL = "data/orders.json";
+  // A machine with no local Orders data falls back to Reports published via
+  // "Xuất báo cáo" (see exportReportById) and committed under data/reports/ —
+  // this is how other devices get to pick a Report and view it, on a static,
+  // no-backend site. The manifest lists what's available; each Report's own
+  // JSON is fetched only once it's actually selected.
+  const REPORTS_MANIFEST_URL = "data/reports/index.json";
+  const publishedReportCache = new Map();
+
+  async function fetchReportsManifest() {
+    try {
+      const res = await fetch(REPORTS_MANIFEST_URL, { cache: "no-store" });
+      if (!res.ok) return [];
+      const list = await res.json();
+      return Array.isArray(list) ? list : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  async function fetchPublishedReport(entry) {
+    if (publishedReportCache.has(entry.id)) return publishedReportCache.get(entry.id);
+    const res = await fetch("data/reports/" + entry.file, { cache: "no-store" });
+    if (!res.ok) throw new Error("report file not found: " + entry.file);
+    const data = await res.json();
+    publishedReportCache.set(entry.id, data);
+    return data;
+  }
 
   async function refreshDashboard() {
     const localRows = await DB.getAllWithKeys("orders");
-    let rows = localRows;
-    let source = "local";
-    let publishedMapping = null;
-    let publishedAt = null;
 
-    if (!localRows.length) {
-      try {
-        const res = await fetch(SNAPSHOT_URL, { cache: "no-store" });
-        if (res.ok) {
-          const snap = await res.json();
-          if (Array.isArray(snap.rows) && snap.rows.length) {
-            rows = snap.rows.map(v => ({ key: null, value: v }));
-            publishedMapping = snap.mapping || null;
-            publishedAt = snap.exportedAt || null;
-            source = "published";
-          }
+    if (localRows.length) {
+      dash.source = "local";
+      const grouped = groupOrdersByReport(localRows);
+      dash.reports = grouped.map(r => ({ id: r.reportId, name: r.name, uploadedAt: r.uploadedAt, rowCount: r.rowCount }));
+      if (!dash.selectedReportId || !dash.reports.some(r => r.id === dash.selectedReportId)) {
+        dash.selectedReportId = dash.reports[0] ? dash.reports[0].id : null;
+      }
+      dash.raw = localRows.filter(({ value }) => (value.__reportId || LEGACY_REPORT_ID) === dash.selectedReportId);
+      dash.publishedAt = dash.reports.find(r => r.id === dash.selectedReportId)?.uploadedAt || null;
+      dash.publishedMapping = null;
+    } else {
+      dash.source = "published";
+      const manifest = await fetchReportsManifest();
+      dash.reports = manifest
+        .map(m => ({ id: m.id, name: m.name, uploadedAt: m.uploadedAt, rowCount: m.rowCount }))
+        .sort((a, b) => (b.uploadedAt || "").localeCompare(a.uploadedAt || ""));
+      if (!dash.selectedReportId || !dash.reports.some(r => r.id === dash.selectedReportId)) {
+        dash.selectedReportId = dash.reports[0] ? dash.reports[0].id : null;
+      }
+      const entry = manifest.find(m => m.id === dash.selectedReportId);
+      if (entry) {
+        try {
+          const data = await fetchPublishedReport(entry);
+          dash.raw = (data.rows || []).map(v => ({ key: null, value: v }));
+          dash.publishedMapping = data.mapping || null;
+        } catch (e) {
+          dash.raw = [];
+          dash.publishedMapping = null;
         }
-      } catch (e) { /* no published snapshot available yet */ }
+      } else {
+        dash.raw = [];
+        dash.publishedMapping = null;
+      }
+      dash.publishedAt = entry?.uploadedAt || null;
     }
 
-    dash.raw = rows;
-    dash.source = source;
-    dash.publishedAt = publishedAt;
-    el("btnExportSnapshot").hidden = source !== "local";
+    el("btnExportSnapshot").hidden = dash.source !== "local";
+    renderReportPicker();
 
-    if (!rows.length) {
+    if (!dash.raw.length) {
       el("dashboardEmpty").hidden = false;
       el("dashboardContent").hidden = true;
       return;
@@ -509,9 +679,9 @@
     el("dashboardEmpty").hidden = true;
     el("dashboardContent").hidden = false;
 
-    const headers = inferColumns(rows);
+    const headers = inferColumns(dash.raw);
     const auto = detectMapping(headers);
-    const override = source === "published" ? publishedMapping : loadMappingOverride();
+    const override = dash.source === "published" ? dash.publishedMapping : loadMappingOverride();
     const mapping = {};
     FIELDS.forEach(f => {
       mapping[f.key] = override ? (override[f.key] || "") : (auto[f.key] || "");
@@ -524,30 +694,37 @@
     applyFiltersAndRender();
   }
 
+  function renderReportPicker() {
+    const wrap = el("reportPickerWrap");
+    if (!dash.reports.length) { wrap.hidden = true; return; }
+    wrap.hidden = false;
+    const sel = el("reportPicker");
+    sel.innerHTML = dash.reports.map(r => {
+      const when = r.uploadedAt ? new Date(r.uploadedAt).toLocaleDateString("vi-VN") : "";
+      return `<option value="${escapeHtml(r.id)}">${escapeHtml(r.name)}${when ? " — " + when : ""} (${r.rowCount.toLocaleString("vi-VN")} dòng)</option>`;
+    }).join("");
+    sel.value = dash.selectedReportId;
+  }
+
   function renderMappingBanner() {
     const parts = FIELDS.filter(f => dash.mapping[f.key]).map(f => `${f.label} = ${dash.mapping[f.key]}`);
     let text = "Đã nhận diện cột: " + (parts.length ? parts.join(" · ") : "chưa nhận diện được cột nào");
     if (dash.source === "published") {
       const when = dash.publishedAt ? new Date(dash.publishedAt).toLocaleString("vi-VN") : "không rõ thời điểm";
-      text = `📡 Đang xem báo cáo đã publish lúc ${when} — ${text}`;
+      text = `📡 Đang xem Report đã publish lúc ${when} — ${text}`;
     }
     el("mappingBannerText").textContent = text;
   }
 
   function wireSnapshotExport() {
-    el("btnExportSnapshot").onclick = () => {
-      const payload = {
-        exportedAt: new Date().toISOString(),
-        mapping: dash.mapping,
-        rows: dash.raw.map(r => r.value),
-      };
-      const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "orders.json";
-      a.click();
-      URL.revokeObjectURL(url);
+    el("btnExportSnapshot").onclick = async () => {
+      if (!dash.selectedReportId) return;
+      await exportReportById(dash.selectedReportId);
+      renderReportsList();
+    };
+    el("reportPicker").onchange = e => {
+      dash.selectedReportId = e.target.value;
+      refreshDashboard();
     };
   }
 
@@ -909,9 +1086,10 @@
 
     el("btnSample").addEventListener("click", async () => {
       const uploadedAt = new Date().toISOString();
-      const rows = generateSampleRows().map(r => ({ ...r, __sourceFile: "Dữ liệu mẫu", __uploadedAt: uploadedAt }));
+      const rows = generateSampleRows().map(r => ({ ...r, __sourceFile: "Dữ liệu mẫu", __uploadedAt: uploadedAt, __reportId: uploadedAt }));
       await DB.bulkPut("orders", rows);
       await refreshDataManager("orders");
+      dash.selectedReportId = uploadedAt;
       refreshDashboard();
     });
 
