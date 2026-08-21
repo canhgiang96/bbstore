@@ -47,17 +47,12 @@
   const UNTAGGED_BATCH_LABEL = "(Thêm thủ công / không rõ nguồn)";
   function batchLabel(row) { return row.__sourceFile || UNTAGGED_BATCH_LABEL; }
 
-  /* ================= Store metadata (Master/Combo/Điều chỉnh — Orders and Dòng tiền are API-backed, not a generic store) ================= */
+  /* ================= Store metadata (Master/Điều chỉnh — Orders, Dòng tiền and Combo are API-backed, not a generic store) ================= */
   const STORE_META = {
     master: {
       label: "Master File",
       headers: ["SKU", "SKU phân loại", "Màu", "Size", "Mục", "Phân loại SP", "Phân loại kho ONL", "Gía vốn"],
       primaryKeyHeader: "SKU phân loại",
-    },
-    combo: {
-      label: "Combo",
-      headers: ["PHÂN LOẠI", "Tỉ lệ SKU 1", "Tỉ lệ SKU 2", "Tỉ lệ SKU 3", "SKU1", "SKU2", "SKU3", "SKU COMBO", "Giá vốn SKU 1", "Giá vốn SKU 2", "Giá vốn SKU 3", "Giá vốn"],
-      primaryKeyHeader: "SKU COMBO",
     },
     adjustments: {
       label: "Điều chỉnh doanh thu",
@@ -78,7 +73,7 @@
     });
   }
 
-  /* ================= Generic data manager (Master/Combo/Dòng tiền/Điều chỉnh) ================= */
+  /* ================= Generic data manager (Master/Điều chỉnh) ================= */
   const managerState = {};
 
   function setupDataManager(storeKey) {
@@ -553,6 +548,113 @@
     reports.filter(r => r.status === "processing").forEach(r => pollCashflowStatus(r.id));
   }
 
+  /* ================= Combo Reports tab (API-backed) — mirrors the Cashflow
+     tab above 1:1, pointed at /api/combo-reports. Combo Reports exist solely
+     to explode matching Orders skuVariant into their sub-SKU components at
+     query time, so uploading/deleting one also refreshes the Dashboard. ================= */
+  let comboPollTimers = {};
+
+  function wireComboTab() {
+    const dz = el("comboUploadDropzone");
+    const input = el("comboUploadInput");
+    if (!API.isAdmin()) {
+      dz.hidden = true;
+    } else {
+      ["dragenter", "dragover"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add("dragover"); }));
+      ["dragleave", "drop"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove("dragover"); }));
+      dz.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) handleComboUpload(f); });
+      input.addEventListener("change", e => {
+        const f = e.target.files[0];
+        if (f) handleComboUpload(f);
+        input.value = "";
+      });
+    }
+    refreshComboReportsList();
+  }
+
+  async function handleComboUpload(file) {
+    const box = el("comboUploadSummary");
+    box.className = "import-summary";
+    box.textContent = `Đang tải lên "${file.name}"...`;
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await API.apiFetch("/api/combo-reports", { method: "POST", body: formData });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Lỗi ${res.status}`);
+      }
+      const created = await res.json();
+      box.className = "import-summary ok";
+      box.textContent = `Đã tải lên — đang xử lý...`;
+      await refreshComboReportsList();
+      pollComboStatus(created.id);
+    } catch (err) {
+      box.className = "import-summary err";
+      box.textContent = "Lỗi tải lên: " + err.message;
+    }
+  }
+
+  function pollComboStatus(reportId) {
+    if (comboPollTimers[reportId]) clearInterval(comboPollTimers[reportId]);
+    comboPollTimers[reportId] = setInterval(async () => {
+      try {
+        const report = await API.apiJson(`/api/combo-reports/${reportId}`);
+        if (report.status !== "processing") {
+          clearInterval(comboPollTimers[reportId]);
+          delete comboPollTimers[reportId];
+          await refreshComboReportsList();
+          if (report.status === "ready") refreshDashboard(); // combo explosion now includes it
+        }
+      } catch (e) { /* transient — keep polling */ }
+    }, 2500);
+  }
+
+  async function refreshComboReportsList() {
+    const isAdmin = API.isAdmin();
+    let reports;
+    try {
+      reports = await API.apiJson("/api/combo-reports");
+    } catch (e) {
+      el("comboReportsListBody").innerHTML = `<p class="muted">Không tải được danh sách Report: ${escapeHtml(e.message)}</p>`;
+      return;
+    }
+    el("comboReportsListCount").textContent = `${reports.length.toLocaleString("vi-VN")} Report`;
+
+    const body = el("comboReportsListBody");
+    if (!reports.length) {
+      body.innerHTML = `<p class="muted" style="padding:16px;">Chưa có Report nào.</p>`;
+      return;
+    }
+
+    body.innerHTML = `<div class="table-scroll"><table><thead><tr>
+        <th>Report</th><th>Trạng thái</th><th>Số dòng</th><th>Tải lên lúc</th>${isAdmin ? "<th>Thao tác</th>" : ""}
+      </tr></thead><tbody>` + reports.map(r => `
+        <tr>
+          <td>${escapeHtml(r.name)}</td>
+          <td>${STATUS_BADGE[r.status] || escapeHtml(r.status)}${r.status === "failed" && r.error_message ? `<div class="muted" style="margin-top:4px;">${escapeHtml(r.error_message)}</div>` : ""}</td>
+          <td>${r.row_count != null ? r.row_count.toLocaleString("vi-VN") : "–"}</td>
+          <td>${new Date(r.uploaded_at).toLocaleString("vi-VN")}</td>
+          ${isAdmin ? `<td><button class="btn btn-danger btn-sm" data-del="${escapeHtml(r.id)}">Xóa</button></td>` : ""}
+        </tr>
+      `).join("") + `</tbody></table></div>`;
+
+    if (isAdmin) {
+      body.querySelectorAll("button[data-del]").forEach(btn => {
+        btn.onclick = async () => {
+          const id = btn.dataset.del;
+          const report = reports.find(r => r.id === id);
+          if (!confirm(`Xóa toàn bộ Report "${report ? report.name : id}"? Hành động này không thể hoàn tác.`)) return;
+          await API.apiJson(`/api/combo-reports/${id}`, { method: "DELETE" });
+          await refreshComboReportsList();
+          refreshDashboard();
+        };
+      });
+    }
+
+    reports.filter(r => r.status === "processing").forEach(r => pollComboStatus(r.id));
+  }
+
   /* ================= Dashboard (aggregates every ready Report — see
      /api/dashboard/summary + /rows; the date/category/status filters below
      are how the user narrows the view, not a per-Report picker) ================= */
@@ -820,6 +922,7 @@
     wireRowModal();
     wireOrdersTab();
     wireCashflowTab();
+    wireComboTab();
     showApp();
     refreshDashboard();
   }

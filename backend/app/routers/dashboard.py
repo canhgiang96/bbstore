@@ -49,6 +49,22 @@ async def _all_ready_cashflow_parquet_paths() -> list:
     return [get_local_parquet(r["id"], r["parquet_key"]) for r in reports if r.get("parquet_key")]
 
 
+async def _all_ready_combo_parquet_paths() -> list:
+    """Every ready Combo Report's Parquet — used to explode matching Orders
+    rows into their sub-SKU components at query time (see
+    query_engine._combo_join / _build_orders_working). Same rationale as
+    Cashflow: joined at query time (not Orders-conversion time) so uploading
+    Combo data later still applies to already-converted Orders Reports, and
+    the same best-effort []-on-error fallback (the combo_reports table may
+    not exist yet right after this ships, before the Supabase migration).
+    """
+    try:
+        reports = await db.pg_select("combo_reports", {"status": "eq.ready", "select": "id,parquet_key"})
+    except Exception:  # noqa: BLE001 — combo explosion is best-effort, never worth 500ing the whole Dashboard for
+        return []
+    return [get_local_parquet(r["id"], r["parquet_key"]) for r in reports if r.get("parquet_key")]
+
+
 @dashboard_router.get("/summary", response_model=SummaryOut)
 async def dashboard_summary(
     from_: Optional[str] = Query(None, alias="from"),
@@ -59,8 +75,10 @@ async def dashboard_summary(
 ):
     paths = await _all_ready_parquet_paths()
     cashflow_paths = await _all_ready_cashflow_parquet_paths()
+    combo_paths = await _all_ready_combo_parquet_paths()
     return run_summary_query(
-        paths, from_date=from_, to_date=to, category=category, status=status, cashflow_source=cashflow_paths,
+        paths, from_date=from_, to_date=to, category=category, status=status,
+        cashflow_source=cashflow_paths, combo_source=combo_paths,
     )
 
 
@@ -79,10 +97,11 @@ async def dashboard_rows(
 ):
     paths = await _all_ready_parquet_paths()
     cashflow_paths = await _all_ready_cashflow_parquet_paths()
+    combo_paths = await _all_ready_combo_parquet_paths()
     return run_rows_query(
         paths, from_date=from_, to_date=to, category=category, status=status,
         search=search, sort=sort, sort_dir=sort_dir, page=page, page_size=pageSize,
-        cashflow_source=cashflow_paths,
+        cashflow_source=cashflow_paths, combo_source=combo_paths,
     )
 
 
@@ -98,8 +117,10 @@ async def summary(
     report = await _get_ready_report(report_id)
     path = get_local_parquet(report_id, report["parquet_key"])
     cashflow_paths = await _all_ready_cashflow_parquet_paths()
+    combo_paths = await _all_ready_combo_parquet_paths()
     return run_summary_query(
-        path, from_date=from_, to_date=to, category=category, status=status, cashflow_source=cashflow_paths,
+        path, from_date=from_, to_date=to, category=category, status=status,
+        cashflow_source=cashflow_paths, combo_source=combo_paths,
     )
 
 
@@ -120,8 +141,9 @@ async def rows(
     report = await _get_ready_report(report_id)
     path = get_local_parquet(report_id, report["parquet_key"])
     cashflow_paths = await _all_ready_cashflow_parquet_paths()
+    combo_paths = await _all_ready_combo_parquet_paths()
     return run_rows_query(
         path, from_date=from_, to_date=to, category=category, status=status,
         search=search, sort=sort, sort_dir=sort_dir, page=page, page_size=pageSize,
-        cashflow_source=cashflow_paths,
+        cashflow_source=cashflow_paths, combo_source=combo_paths,
     )

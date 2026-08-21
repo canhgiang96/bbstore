@@ -469,3 +469,102 @@ def test_summary_phi_aff_summed_across_duplicate_orderid_in_multiple_cashflow_re
     finally:
         os.remove(path_a)
         os.remove(path_b)
+
+
+# ---- Combo explosion ----
+# parquet_path_with_discounts's "D1" order has 2 lines: A100-1 (first line of
+# the order, so it carries the order's 1.620 Piship; doanhSo=200000,
+# discount=4000, voucher=4000) and B200-1 (second line, Piship=0;
+# doanhSo=150000, discount=1500, voucher=6000). A100-1 is set up as a combo
+# matching two sub-SKUs (0.5/0.5); B200-1 has no combo match.
+
+def _write_combo_parquet(rows: list[dict]) -> str:
+    return _write_raw_parquet(rows)
+
+
+@pytest.fixture
+def combo_parquet_path():
+    path = _write_combo_parquet([
+        {"skuCombo": "A100-1", "subSku": "X1-1", "ratio": 0.5, "slot": 1},
+        {"skuCombo": "A100-1", "subSku": "X2-1", "ratio": 0.5, "slot": 2},
+    ])
+    yield path
+    os.remove(path)
+
+
+def test_rows_combo_explodes_matching_sku_into_scaled_children(parquet_path_with_discounts, combo_parquet_path):
+    result = run_rows_query(parquet_path_with_discounts, page_size=10, combo_source=[combo_parquet_path])
+    assert result["total"] == 3  # A100-1 -> 2 children + B200-1 unchanged
+    by_sku = {r["skuVariant"]: r for r in result["rows"]}
+
+    assert set(by_sku) == {"X1-1", "X2-1", "B200-1"}
+
+    # Scaled fields: doanhSo/discount/voucher halved for each 0.5 child.
+    assert by_sku["X1-1"]["doanhSo"] == 100000
+    assert by_sku["X2-1"]["doanhSo"] == 100000
+    assert by_sku["X1-1"]["discount"] == 2000
+    assert by_sku["X2-1"]["discount"] == 2000
+    assert by_sku["X1-1"]["voucher"] == 2000
+    assert by_sku["X2-1"]["voucher"] == 2000
+
+    # Unscaled fields: quantity/returnedQty/soLuongThuc copied as-is.
+    assert by_sku["X1-1"]["quantity"] == by_sku["X2-1"]["quantity"] == 2
+    assert by_sku["X1-1"]["soLuongThuc"] == by_sku["X2-1"]["soLuongThuc"] == 2
+
+    # Piship: A100-1 was D1's first line (1.620) -> all of it goes to the
+    # slot-1 child (X1-1); the slot-2 child (X2-1) gets 0, not scaled by ratio.
+    assert by_sku["X1-1"]["piship"] == 1620
+    assert by_sku["X2-1"]["piship"] == 0
+
+    # B200-1 has no combo match -> passes through completely unchanged.
+    assert by_sku["B200-1"]["doanhSo"] == 150000
+    assert by_sku["B200-1"]["discount"] == 1500
+    assert by_sku["B200-1"]["voucher"] == 6000
+    assert by_sku["B200-1"]["piship"] == 0
+
+    # "sku" (parent code) is re-derived from the new skuVariant.
+    assert by_sku["X1-1"]["sku"] == "X1"
+    assert by_sku["X2-1"]["sku"] == "X2"
+
+
+def test_summary_combo_explosion_preserves_totals(parquet_path_with_discounts, combo_parquet_path):
+    # Splitting a row into scaled children must not change the aggregate
+    # totals — they should reconcile exactly with the un-exploded result.
+    without_combo = run_summary_query(parquet_path_with_discounts)
+    with_combo = run_summary_query(parquet_path_with_discounts, combo_source=[combo_parquet_path])
+    assert with_combo["kpis"]["doanhSo"] == without_combo["kpis"]["doanhSo"] == 350000
+    assert with_combo["kpis"]["discount"] == without_combo["kpis"]["discount"]
+    assert with_combo["kpis"]["voucher"] == without_combo["kpis"]["voucher"]
+    assert with_combo["kpis"]["piship"] == without_combo["kpis"]["piship"] == 1620
+    assert with_combo["kpis"]["rowCount"] == 3
+    assert without_combo["kpis"]["rowCount"] == 2
+
+
+def test_rows_no_combo_data_leaves_orders_unexploded(parquet_path_with_discounts):
+    result = run_rows_query(parquet_path_with_discounts, page_size=10, combo_source=None)
+    assert result["total"] == 2
+    result_empty_list = run_rows_query(parquet_path_with_discounts, page_size=10, combo_source=[])
+    assert result_empty_list["total"] == 2
+
+
+def test_rows_combo_and_cashflow_together_phi_aff_scales_by_combo_ratio_too(
+    parquet_path_with_discounts, combo_parquet_path,
+):
+    # Phí AFF is prorated by orderPaidRatio first (per the existing Phí AFF
+    # feature), then further split by the combo ratio on top of that for an
+    # exploded child, per the user's "tất cả các giá trị theo tỉ lệ" rule.
+    cashflow_path = _write_cashflow_parquet([{"orderId": "D1", "phiAff": 2000.0}])
+    try:
+        result = run_rows_query(
+            parquet_path_with_discounts, page_size=10,
+            combo_source=[combo_parquet_path], cashflow_source=[cashflow_path],
+        )
+        by_sku = {r["skuVariant"]: r for r in result["rows"]}
+        # A100-1's orderPaidRatio is 0.4 (400.000/1.000.000) -> line-level
+        # phiAff = 2000*0.4 = 800, then split 0.5/0.5 by combo ratio.
+        assert by_sku["X1-1"]["phiAff"] == 400
+        assert by_sku["X2-1"]["phiAff"] == 400
+        # B200-1: ratio 0.6 -> 2000*0.6 = 1200, no combo match, unscaled.
+        assert by_sku["B200-1"]["phiAff"] == 1200
+    finally:
+        os.remove(cashflow_path)

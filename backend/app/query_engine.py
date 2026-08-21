@@ -23,14 +23,6 @@ DETAIL_COLUMNS = [
     "platformFee", "piship", "phiAff",
 ]
 
-# Columns that may be absent on Reports converted before they existed —
-# queried via COALESCE(..., 0) when present, or a literal 0 when the
-# column is missing from every file in parquet_source (see
-# _available_columns / col_or_zero). "phiAff" isn't a literal Orders column
-# at all — it's computed via the Cashflow join (see _cashflow_join) — so it
-# isn't in this set even though it gets the same "default to 0" treatment.
-OPTIONAL_NUMERIC_COLUMNS = {"discount", "voucher", "platformFee", "piship"}
-
 ALLOWED_SORT_COLUMNS = {
     "date", "orderId", "product", "category", "customer",
     "quantity", "doanhSo", "trangThai",
@@ -109,11 +101,11 @@ def _where_clause(from_date=None, to_date=None, category=None, status=None):
 
 
 def _available_columns(con, parquet_source) -> set:
-    """Reports converted before "discount"/"voucher" existed don't have
-    those columns in their Parquet schema. union_by_name=true lets DuckDB
-    read a set of Reports with differing schemas together (missing columns
-    come back NULL) — but only when there's at least one file that DOES
-    have the column; a lone old-schema Report still needs the caller to
+    """Reports converted before "discount"/"voucher"/"orderPaidRatio" existed
+    don't have those columns in their Parquet schema. union_by_name=true lets
+    DuckDB read a set of Reports with differing schemas together (missing
+    columns come back NULL) — but only when there's at least one file that
+    DOES have the column; a lone old-schema Report still needs the caller to
     fall back to a literal 0, hence checking availability up front instead
     of just always referencing the column name.
     """
@@ -121,7 +113,25 @@ def _available_columns(con, parquet_source) -> set:
     return {d[0] for d in cur.description}
 
 
-def _cashflow_join(available: set, cashflow_source) -> tuple[str, list, str]:
+def _combo_join(combo_source) -> tuple[str, list, str, str, str]:
+    """Returns (join_sql, join_params, sku_variant_expr, ratio_expr,
+    slot_expr) to LEFT JOIN Combo sub-SKUs into an Orders query whose FROM
+    clause is aliased "o". When combo_source is empty, the expressions
+    reference only "o" (no "cm" join exists), so they're always safe to use
+    unconditionally in the SELECT list.
+
+    A matching row explodes 1:many (once per non-blank SKU1/SKU2/SKU3 the
+    Combo file has for that SKU COMBO) — that's what makes this different
+    from _cashflow_agg_join, which only ever adds a column.
+    """
+    if not combo_source:
+        return "", [], 'o."skuVariant"', "1", "NULL"
+    join_sql = 'LEFT JOIN read_parquet(?, union_by_name=true) cm ON o."skuVariant" = cm."skuCombo"'
+    sku_variant_expr = 'COALESCE(cm."subSku", o."skuVariant")'
+    return join_sql, [combo_source], sku_variant_expr, "COALESCE(cm.ratio, 1)", "cm.slot"
+
+
+def _cashflow_agg_join(available: set, cashflow_source) -> tuple[str, list, str]:
     """Returns (join_sql, join_params, aff_expr) to LEFT JOIN per-order Phí
     AFF from ready Cashflow Reports into an Orders query whose FROM clause
     is aliased "o". aff_expr is always safe to use unconditionally — it's a
@@ -146,8 +156,61 @@ def _cashflow_join(available: set, cashflow_source) -> tuple[str, list, str]:
     return join_sql, [cashflow_source], aff_expr
 
 
+def _build_orders_working(con, parquet_source, available: set, combo_source, cashflow_source) -> None:
+    """Materializes a TEMP TABLE "orders_working" combining the Combo
+    explosion and the Phí AFF join exactly once per call — every query below
+    (totals, timeline, top_n, facets, count, the paginated rows select) then
+    just reads FROM orders_working instead of each repeating both joins.
+
+    Combo explosion changes the row SET itself (1 Orders row -> 0..3 rows),
+    unlike Phí AFF which only adds a column — that's why this needs to
+    happen once, up front, rather than per-query like _cashflow_agg_join
+    used to be applied directly. All backward-compat COALESCE-or-0 handling
+    for discount/voucher/platformFee/piship is resolved here too, so
+    everything downstream can just reference the plain column name.
+    """
+    discount_col = 'COALESCE("discount", 0)' if "discount" in available else "0"
+    voucher_col = 'COALESCE("voucher", 0)' if "voucher" in available else "0"
+    platform_fee_col = 'COALESCE("platformFee", 0)' if "platformFee" in available else "0"
+    piship_col = 'COALESCE("piship", 0)' if "piship" in available else "0"
+
+    combo_join_sql, combo_params, sku_variant_expr, ratio_expr, slot_expr = _combo_join(combo_source)
+    cashflow_join_sql, cashflow_params, aff_expr = _cashflow_agg_join(available, cashflow_source)
+
+    create_sql = f"""
+        CREATE TEMP TABLE orders_working AS
+        SELECT
+          o."date" AS "date",
+          o."orderId" AS "orderId",
+          {sku_variant_expr} AS "skuVariant",
+          split_part({sku_variant_expr}, '-', 1) AS "sku",
+          o."product" AS "product",
+          o."category" AS "category",
+          o."customer" AS "customer",
+          o."quantity" AS "quantity",
+          o."returnedQty" AS "returnedQty",
+          o."soLuongThuc" AS "soLuongThuc",
+          o."price" * {ratio_expr} AS "price",
+          o."originalPrice" * {ratio_expr} AS "originalPrice",
+          o."revenue" * {ratio_expr} AS "revenue",
+          o."doanhSo" * {ratio_expr} AS "doanhSo",
+          o."status" AS "status",
+          o."trangThai" AS "trangThai",
+          {discount_col} * {ratio_expr} AS "discount",
+          {voucher_col} * {ratio_expr} AS "voucher",
+          {platform_fee_col} * {ratio_expr} AS "platformFee",
+          CASE WHEN {slot_expr} IS NULL OR {slot_expr} = 1 THEN {piship_col} ELSE 0 END AS "piship",
+          ({aff_expr}) * {ratio_expr} AS "phiAff"
+        FROM read_parquet(?, union_by_name=true) o
+        {combo_join_sql}
+        {cashflow_join_sql}
+    """
+    con.execute(create_sql, [*[parquet_source], *combo_params, *cashflow_params])
+
+
 def run_summary_query(
-    parquet_source, from_date=None, to_date=None, category=None, status=None, cashflow_source=None,
+    parquet_source, from_date=None, to_date=None, category=None, status=None,
+    cashflow_source=None, combo_source=None,
 ) -> dict:
     if _is_empty_source(parquet_source):
         return EMPTY_SUMMARY
@@ -156,11 +219,7 @@ def run_summary_query(
     try:
         where_sql, params = _where_clause(from_date, to_date, category, status)
         available = _available_columns(con, parquet_source)
-        discount_col = 'COALESCE("discount", 0)' if "discount" in available else "0"
-        voucher_col = 'COALESCE("voucher", 0)' if "voucher" in available else "0"
-        platform_fee_col = 'COALESCE("platformFee", 0)' if "platformFee" in available else "0"
-        piship_col = 'COALESCE("piship", 0)' if "piship" in available else "0"
-        cf_join_sql, cf_join_params, aff_expr = _cashflow_join(available, cashflow_source)
+        _build_orders_working(con, parquet_source, available, combo_source, cashflow_source)
 
         totals_sql = f"""
             SELECT
@@ -169,36 +228,35 @@ def run_summary_query(
               COALESCE(SUM(CASE WHEN "trangThai" = 'Hủy chưa XK' THEN "doanhSo" ELSE 0 END), 0) AS huy_chua_xk,
               COALESCE(SUM(CASE WHEN "trangThai" = 'Hủy sau XK' THEN "doanhSo" ELSE 0 END), 0) AS huy_sau_xk,
               COALESCE(SUM("originalPrice" * "returnedQty"), 0) AS hoan,
-              COALESCE(SUM(CASE WHEN "trangThai" IN {GMV_STATUSES_SQL} THEN {discount_col} ELSE 0 END), 0) AS discount,
-              COALESCE(SUM(CASE WHEN "trangThai" IN {GMV_STATUSES_SQL} THEN {voucher_col} ELSE 0 END), 0) AS voucher,
-              COALESCE(SUM({platform_fee_col}), 0) AS platform_fee,
-              COALESCE(SUM({piship_col}), 0) AS piship,
-              COALESCE(SUM({aff_expr}), 0) AS phi_aff,
+              COALESCE(SUM(CASE WHEN "trangThai" IN {GMV_STATUSES_SQL} THEN "discount" ELSE 0 END), 0) AS discount,
+              COALESCE(SUM(CASE WHEN "trangThai" IN {GMV_STATUSES_SQL} THEN "voucher" ELSE 0 END), 0) AS voucher,
+              COALESCE(SUM("platformFee"), 0) AS platform_fee,
+              COALESCE(SUM("piship"), 0) AS piship,
+              COALESCE(SUM("phiAff"), 0) AS phi_aff,
               COUNT(*) AS row_count
-            FROM read_parquet(?, union_by_name=true) o
-            {cf_join_sql}
+            FROM orders_working
             WHERE {where_sql}
         """
         total, gmv, huy_chua_xk, huy_sau_xk, hoan, discount, voucher, platform_fee, piship, phi_aff, row_count = con.execute(
-            totals_sql, [parquet_source, *cf_join_params, *params]
+            totals_sql, params
         ).fetchone()
         doanh_thu_thuan = gmv - discount - voucher
         nmv = doanh_thu_thuan - platform_fee - piship - phi_aff
 
         timeline_sql = f"""
             SELECT strftime("date", '%Y-%m') AS month, SUM("doanhSo") AS value
-            FROM read_parquet(?, union_by_name=true) WHERE {where_sql}
+            FROM orders_working WHERE {where_sql}
             GROUP BY month ORDER BY month
         """
-        timeline = con.execute(timeline_sql, [parquet_source, *params]).fetchall()
+        timeline = con.execute(timeline_sql, params).fetchall()
 
         def top_n(column: str, n: int = 8):
             sql = f"""
                 SELECT "{column}" AS label, SUM("doanhSo") AS value
-                FROM read_parquet(?, union_by_name=true) WHERE {where_sql}
+                FROM orders_working WHERE {where_sql}
                 GROUP BY label ORDER BY value DESC LIMIT {n}
             """
-            return con.execute(sql, [parquet_source, *params]).fetchall()
+            return con.execute(sql, params).fetchall()
 
         top_products = top_n("product")
         category_breakdown = top_n("category")
@@ -210,9 +268,9 @@ def run_summary_query(
             SELECT
               list(DISTINCT "category") AS categories,
               list(DISTINCT "trangThai") AS statuses
-            FROM read_parquet(?, union_by_name=true)
+            FROM orders_working
         """
-        categories, statuses = con.execute(facets_sql, [parquet_source]).fetchone()
+        categories, statuses = con.execute(facets_sql).fetchone()
 
         return {
             "kpis": {
@@ -247,7 +305,7 @@ def run_rows_query(
     parquet_source,
     from_date=None, to_date=None, category=None, status=None,
     search=None, sort="date", sort_dir="asc", page=1, page_size=15,
-    cashflow_source=None,
+    cashflow_source=None, combo_source=None,
 ) -> dict:
     page = max(1, page)
     if _is_empty_source(parquet_source):
@@ -257,7 +315,7 @@ def run_rows_query(
     try:
         where_sql, params = _where_clause(from_date, to_date, category, status)
         available = _available_columns(con, parquet_source)
-        cf_join_sql, cf_join_params, aff_expr = _cashflow_join(available, cashflow_source)
+        _build_orders_working(con, parquet_source, available, combo_source, cashflow_source)
 
         if search:
             where_sql += (
@@ -269,8 +327,7 @@ def run_rows_query(
             params.extend([like] * 6)
 
         total = con.execute(
-            f'SELECT COUNT(*) FROM read_parquet(?, union_by_name=true) o WHERE {where_sql}',
-            [parquet_source, *params],
+            f'SELECT COUNT(*) FROM orders_working WHERE {where_sql}', params
         ).fetchone()[0]
 
         # Column/direction are whitelisted, not parameterized — DuckDB can't
@@ -279,26 +336,17 @@ def run_rows_query(
         sort_dir_sql = "DESC" if str(sort_dir).lower() == "desc" else "ASC"
         offset = (page - 1) * page_size
 
-        def col_expr(c: str) -> str:
-            if c == "phiAff":
-                return f'{aff_expr} AS "phiAff"'
-            if c in OPTIONAL_NUMERIC_COLUMNS:
-                return f'COALESCE("{c}", 0) AS "{c}"' if c in available else f'CAST(0 AS DOUBLE) AS "{c}"'
-            return f'"{c}"'
-
-        cols_sql = ", ".join(col_expr(c) for c in DETAIL_COLUMNS)
+        cols_sql = ", ".join(f'"{c}"' for c in DETAIL_COLUMNS)
         rows_sql = f"""
             SELECT {cols_sql}
-            FROM read_parquet(?, union_by_name=true) o
-            {cf_join_sql}
-            WHERE {where_sql}
+            FROM orders_working WHERE {where_sql}
             ORDER BY "{sort_col}" {sort_dir_sql}
             LIMIT ? OFFSET ?
         """
         # .fetchall() (not .fetchdf()) so values come back as plain Python
         # types (int/float/str/datetime) — a pandas DataFrame would give us
         # numpy/pandas types that FastAPI's JSON encoder can choke on.
-        cursor = con.execute(rows_sql, [parquet_source, *cf_join_params, *params, page_size, offset])
+        cursor = con.execute(rows_sql, [*params, page_size, offset])
         col_names = [d[0] for d in cursor.description]
         rows = [dict(zip(col_names, r)) for r in cursor.fetchall()]
 

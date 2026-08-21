@@ -36,6 +36,14 @@ def cashflow_parquet_key(report_id: str) -> str:
     return f"cashflow-reports/{report_id}/data.parquet"
 
 
+def combo_original_key(report_id: str, filename: str) -> str:
+    return f"combo-reports/{report_id}/original.xlsx"
+
+
+def combo_parquet_key(report_id: str) -> str:
+    return f"combo-reports/{report_id}/data.parquet"
+
+
 def upload_bytes(key: str, data: bytes, content_type: str) -> None:
     s = get_settings()
     _client().put_object(Bucket=s.r2_bucket_name, Key=key, Body=data, ContentType=content_type)

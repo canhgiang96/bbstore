@@ -250,9 +250,32 @@
     </div>
   </section>
 
-  <!-- ============ DATA MANAGER TABS (master, combo, adjustments) ============ -->
+  <!-- ============ COMBO REPORTS TAB (server-backed — explodes matching Orders SKUs into their components) ============ -->
+  <section class="tab-panel" id="panel-combo" hidden>
+    <div class="data-panel-header">
+      <h2>Combo — Report</h2>
+    </div>
+
+    <div class="drop-zone" id="comboUploadDropzone">
+      <div class="drop-zone-icon">📁</div>
+      <h2>Kéo thả file Excel vào đây</h2>
+      <p>hoặc</p>
+      <label class="btn btn-primary" for="comboUploadInput">Chọn file (.xlsx, .xls, .csv)</label>
+      <input type="file" id="comboUploadInput" accept=".xlsx,.xls,.csv" hidden />
+      <div class="import-summary" id="comboUploadSummary"></div>
+    </div>
+
+    <div class="card table-card">
+      <div class="table-card-header">
+        <h3>Danh sách Report</h3>
+        <span class="muted" id="comboReportsListCount"></span>
+      </div>
+      <div id="comboReportsListBody"></div>
+    </div>
+  </section>
+
+  <!-- ============ DATA MANAGER TABS (master, adjustments) ============ -->
   <section class="tab-panel" id="panel-master" hidden></section>
-  <section class="tab-panel" id="panel-combo" hidden></section>
   <section class="tab-panel" id="panel-adjustments" hidden></section>
 
 </main>
@@ -278,8 +301,8 @@
   </div>
 </div>
 
-<script src="js/db.js?v=14"></script>
-<script src="js/api.js?v=14"></script>
-<script src="js/app.js?v=14"></script>
+<script src="js/db.js?v=15"></script>
+<script src="js/api.js?v=15"></script>
+<script src="js/app.js?v=15"></script>
 </body>
 </html>
