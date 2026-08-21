@@ -63,14 +63,20 @@
     return v ?? "";
   }
 
+  // Keys prefixed with "__" are internal bookkeeping (which file a row came from)
+  // and never shown as a data column, edited, or fed into mapping detection.
   function inferColumns(rows) {
     const seen = [];
     const set = new Set();
     rows.slice(0, 50).forEach(({ value }) => Object.keys(value).forEach(k => {
+      if (k.startsWith("__")) return;
       if (!set.has(k)) { set.add(k); seen.push(k); }
     }));
     return seen;
   }
+
+  const UNTAGGED_BATCH_LABEL = "(Thêm thủ công / không rõ nguồn)";
+  function batchLabel(row) { return row.__sourceFile || UNTAGGED_BATCH_LABEL; }
 
   /* ================= Orders column detection (for the Dashboard) ================= */
   const FIELDS = [
@@ -209,6 +215,10 @@
         <input type="file" id="file-${storeKey}" accept=".xlsx,.xls,.csv" hidden />
         <div class="import-summary" id="importSummary-${storeKey}"></div>
       </div>
+      <div class="card file-batches" id="fileBatches-${storeKey}" hidden>
+        <h3>Theo file đã tải lên</h3>
+        <div id="fileBatchList-${storeKey}"></div>
+      </div>
       <div class="data-toolbar">
         <button class="btn btn-primary btn-sm" id="btnAdd-${storeKey}">+ Thêm dòng</button>
         <button class="btn btn-danger btn-sm" id="btnClearAll-${storeKey}">Xóa tất cả</button>
@@ -283,6 +293,8 @@
         const ws = wb.Sheets[wb.SheetNames[0]];
         let rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
         if (meta.headers) rows = rows.map(r => normalizeRowHeaders(r, meta.headers));
+        const uploadedAt = new Date().toISOString();
+        rows = rows.map(r => ({ ...r, __sourceFile: file.name, __uploadedAt: uploadedAt }));
         const n = await DB.bulkPut(storeKey, rows);
         showImportSummary(storeKey, `Đã nhập ${n.toLocaleString("vi-VN")} dòng từ "${file.name}" (sheet: ${wb.SheetNames[0]}).`, true);
         await refreshDataManager(storeKey);
@@ -307,7 +319,43 @@
     st.all = rows;
     st.columns = meta.headers || inferColumns(rows);
     el("count-" + storeKey).textContent = `${rows.length.toLocaleString("vi-VN")} dòng`;
+    renderFileBatches(storeKey);
     applyManagerSearch(storeKey);
+  }
+
+  function renderFileBatches(storeKey) {
+    const st = managerState[storeKey];
+    const groups = new Map(); // label -> { count, uploadedAt }
+    st.all.forEach(({ value }) => {
+      const label = batchLabel(value);
+      if (!groups.has(label)) groups.set(label, { count: 0, uploadedAt: value.__uploadedAt || null });
+      groups.get(label).count++;
+    });
+
+    const box = el("fileBatches-" + storeKey);
+    if (groups.size === 0) { box.hidden = true; return; }
+    box.hidden = false;
+
+    const list = el("fileBatchList-" + storeKey);
+    list.innerHTML = Array.from(groups.entries()).map(([label, info]) => {
+      const when = info.uploadedAt ? new Date(info.uploadedAt).toLocaleString("vi-VN") : "";
+      return `<div class="file-batch-row">
+        <span class="file-batch-name">${escapeHtml(label)}</span>
+        <span class="muted">${info.count.toLocaleString("vi-VN")} dòng${when ? " · " + when : ""}</span>
+        <button class="btn btn-danger btn-sm" data-label="${escapeHtml(label)}">Xóa file này</button>
+      </div>`;
+    }).join("");
+
+    list.querySelectorAll("button[data-label]").forEach(btn => {
+      btn.onclick = async () => {
+        const label = btn.dataset.label;
+        if (!confirm(`Xóa toàn bộ dữ liệu từ "${label}"?`)) return;
+        const targets = st.all.filter(({ value }) => batchLabel(value) === label);
+        for (const t of targets) await DB.delete(storeKey, t.key);
+        await refreshDataManager(storeKey);
+        if (storeKey === "orders") refreshDashboard();
+      };
+    });
   }
 
   function applyManagerSearch(storeKey) {
@@ -363,7 +411,7 @@
     const columns = meta.headers || st.columns;
     const isNew = !row;
 
-    rowModalContext = { storeKey, key: row ? row.key : undefined, isNew, columns };
+    rowModalContext = { storeKey, key: row ? row.key : undefined, isNew, columns, originalValue: row ? row.value : null };
     el("modalTitle").textContent = (isNew ? "Thêm dòng — " : "Sửa dòng — ") + meta.label;
 
     const body = el("modalBody");
@@ -391,9 +439,11 @@
     el("modalCancel").onclick = closeRowModal;
     el("modalSave").onclick = async () => {
       if (!rowModalContext || !rowModalContext.columns.length) { closeRowModal(); return; }
-      const { storeKey, key, isNew } = rowModalContext;
+      const { storeKey, key, isNew, originalValue } = rowModalContext;
       const inputs = el("modalBody").querySelectorAll("input[data-col]");
-      const record = {};
+      // Start from the original row so internal "__" bookkeeping fields (which
+      // file a row came from) survive an edit even though they have no input.
+      const record = originalValue ? { ...originalValue } : {};
       inputs.forEach(inp => { record[inp.dataset.col] = inp.value; });
 
       if (isNew) {
@@ -858,7 +908,9 @@
     wireSnapshotExport();
 
     el("btnSample").addEventListener("click", async () => {
-      await DB.bulkPut("orders", generateSampleRows());
+      const uploadedAt = new Date().toISOString();
+      const rows = generateSampleRows().map(r => ({ ...r, __sourceFile: "Dữ liệu mẫu", __uploadedAt: uploadedAt }));
+      await DB.bulkPut("orders", rows);
       await refreshDataManager("orders");
       refreshDashboard();
     });

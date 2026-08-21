@@ -154,6 +154,14 @@ body {
 .import-summary.ok { color: var(--success); }
 .import-summary.err { color: var(--danger); }
 
+.file-batches { margin-bottom: 20px; }
+.file-batches h3 { margin: 0 0 12px; font-size: 14px; }
+.file-batch-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.file-batch-row:last-child { border-bottom: none; }
+.file-batch-name { font-weight: 600; font-size: 13.5px; word-break: break-all; }
+.file-batch-row .muted { white-space: nowrap; }
+.file-batch-row button { margin-left: auto; flex-shrink: 0; }
+
 /* Modal */
 .modal-overlay {
   position: fixed; inset: 0; background: rgba(10, 12, 20, 0.45);

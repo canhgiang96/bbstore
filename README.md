@@ -22,6 +22,7 @@ Trang web tổng hợp dữ liệu kinh doanh từ nhiều file Excel (đơn hà
 **Quản lý dữ liệu (5 tab riêng: Đơn hàng, Master File, Combo, Dòng tiền, Điều chỉnh doanh thu)**
 - Upload file `.xlsx`, `.xls`, `.csv` (kéo thả hoặc chọn file) — dữ liệu được lưu vào IndexedDB của trình duyệt
 - Với Master File / Combo / Dòng tiền: tải lên lại sẽ **cập nhật** dòng có khóa trùng (SKU phân loại / SKU COMBO / Mã đơn hàng) thay vì tạo trùng lặp
+- Mỗi lần upload được nhóm theo tên file trong mục **"Theo file đã tải lên"** — xem số dòng/thời gian và **xóa cả file đó** chỉ với 1 click, không cần xóa từng dòng
 - Thêm dòng thủ công, sửa từng dòng, xóa từng dòng, hoặc xóa toàn bộ dữ liệu một loại
 - Tìm kiếm và phân trang trên mỗi bảng dữ liệu
 
