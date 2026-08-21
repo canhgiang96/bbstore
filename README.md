@@ -7,12 +7,16 @@ Trang web tổng hợp dữ liệu kinh doanh từ nhiều file Excel (đơn hà
 ## Tính năng
 
 **Dashboard**
-- Tự động nhận diện các cột: Ngày, Sản phẩm, Danh mục, Khách hàng, Số lượng, Đơn giá, Doanh thu, Trạng thái đơn hàng, Mã đơn hàng, SKU phân loại hàng
+- Tự động nhận diện các cột: Ngày, Sản phẩm, Danh mục, Khách hàng, Số lượng, Đơn giá, Giá gốc, Doanh thu, Trạng thái đơn hàng, Lý do hủy, SL sản phẩm hoàn trả, Mã đơn hàng, SKU phân loại hàng
 - Nút "Chỉnh cột ⚙️" để ghi đè nhận diện tự động khi cần
-- Tự tính Doanh thu = Đơn giá × Số lượng nếu file không có sẵn cột doanh thu
-- Tự loại trừ đơn đã hủy/hoàn trả khỏi số liệu (dựa trên cột Trạng thái đơn hàng)
-- Bộ lọc theo khoảng thời gian và danh mục
-- 4 chỉ số KPI, 4 biểu đồ, bảng dữ liệu chi tiết có tìm kiếm và phân trang
+- **Cột tự tính:**
+  - `SKU` = SKU phân loại hàng, bỏ `-` và phần phía sau (mã cha của biến thể)
+  - `Doanh số` = Giá gốc × Số lượng
+  - `Số lượng thực` = Số lượng − Số lượng sản phẩm được hoàn trả
+  - `Trạng thái` (suy ra theo thứ tự ưu tiên): **Hủy sau XK** (trạng thái chứa "hủy" + lý do hủy chứa "Giao hàng thất bại") → **Hủy chưa XK** (chứa "hủy", lý do khác) → **Hoàn hàng** (Số lượng thực = 0) → **Hoàn 1 phần** (có hoàn trả nhưng Số lượng thực > 0) → **Hoàn thành** (trạng thái đơn hàng = Hoàn thành) → còn lại là **Đang giao**
+- 5 chỉ số KPI: Doanh số, Doanh số thuần (Hoàn thành + Đang giao), Doanh số hủy chưa XK, Doanh số hủy sau XK, Doanh số hoàn (Hoàn hàng + Hoàn 1 phần) — 4 mục sau cộng lại đúng bằng Doanh số tổng
+- Bộ lọc theo khoảng thời gian, danh mục, và trạng thái (6 giá trị suy ra ở trên)
+- 4 biểu đồ theo Doanh số, bảng dữ liệu chi tiết có tìm kiếm và phân trang
 - Nút "Dùng dữ liệu mẫu" để xem thử ngay không cần file
 
 **Quản lý dữ liệu (5 tab riêng: Đơn hàng, Master File, Combo, Dòng tiền, Điều chỉnh doanh thu)**

@@ -84,6 +84,9 @@
     { key: "status", label: "Trạng thái đơn hàng", required: false },
     { key: "orderId", label: "Mã đơn hàng", required: false },
     { key: "skuVariant", label: "SKU phân loại hàng", required: false },
+    { key: "originalPrice", label: "Giá gốc", required: false },
+    { key: "cancelReason", label: "Lý do hủy", required: false },
+    { key: "returnedQty", label: "SL sản phẩm hoàn trả", required: false },
   ];
 
   const KEYWORDS = {
@@ -92,11 +95,14 @@
     category: ["ten phan loai hang", "danh muc san pham", "danh muc", "phan loai hang", "phan loai", "loai", "nhom", "category"],
     customer: ["ten khach hang", "khach hang", "khach", "customer"],
     quantity: ["so luong san pham", "so luong", "qty", "quantity", "sl"],
-    price: ["gia uu dai", "don gia", "gia ban", "gia goc", "gia", "price", "unit price"],
+    price: ["gia uu dai", "don gia", "gia ban", "gia", "price", "unit price"],
     revenue: ["tong gia tri don hang", "tong so tien thanh toan", "doanh thu", "thanh tien", "tong tien", "gia tri don hang", "thanh toan", "revenue", "total", "amount", "gia tri"],
     status: ["trang thai don hang", "trang thai", "status"],
     orderId: ["ma don hang"],
     skuVariant: ["sku phan loai hang", "sku phan loai"],
+    originalPrice: ["gia goc"],
+    cancelReason: ["ly do huy"],
+    returnedQty: ["so luong san pham duoc hoan tra", "so luong hoan tra", "sl hoan tra"],
   };
 
   const IDENTIFIER_PREFIX = /^(sku|ma|id)\b/;
@@ -119,16 +125,24 @@
           if (score > bestScore) { bestScore = score; bestHeader = h; }
         }
       }
-      if (bestHeader) result[field] = bestHeader;
+      if (bestHeader && bestScore > 0) result[field] = bestHeader;
     }
     return result;
   }
 
-  const CANCELLED_STATUS_WORDS = ["huy", "hoan tien", "hoan tra", "tra hang", "refund", "cancel"];
-  function isCancelledStatus(status) {
-    if (!status) return false;
-    const n = stripDiacritics(status);
-    return CANCELLED_STATUS_WORDS.some(w => n.includes(w));
+  // Business status buckets, derived per row from the raw order status + return
+  // quantity — this is what the Dashboard's 5 "Doanh số" KPIs and status filter
+  // are grouped by (see buildDashboardRecords).
+  function deriveOrderStatus(rawStatus, cancelReason, soLuongThuc, returnedQty) {
+    const statusNorm = stripDiacritics(rawStatus || "");
+    const reasonNorm = stripDiacritics(cancelReason || "");
+    if (statusNorm.includes("huy")) {
+      return reasonNorm.includes("giao hang that bai") ? "Hủy sau XK" : "Hủy chưa XK";
+    }
+    if (soLuongThuc === 0) return "Hoàn hàng";
+    if (returnedQty > 0 && soLuongThuc > 0) return "Hoàn 1 phần";
+    if (statusNorm.includes("hoan thanh")) return "Hoàn thành";
+    return "Đang giao";
   }
 
   const MAPPING_OVERRIDE_KEY = "bbstore_mapping_override";
@@ -403,7 +417,6 @@
     pageSize: 15,
     search: "",
     charts: {},
-    excludedCancelledCount: 0,
   };
 
   // A machine with no local data falls back to the last snapshot published via
@@ -500,22 +513,41 @@
       if (revenue == null && price != null && quantity != null) revenue = price * quantity;
       if (revenue == null) revenue = 0;
 
+      const skuVariant = m.skuVariant ? String(row[m.skuVariant] ?? "").trim() : "";
+      const sku = skuVariant ? skuVariant.split("-")[0] : "";
+      const originalPrice = m.originalPrice ? toNumber(row[m.originalPrice]) : 0;
+      const qty = quantity ?? 0;
+      const returnedQty = m.returnedQty ? toNumber(row[m.returnedQty]) : 0;
+      const soLuongThuc = qty - returnedQty;
+      const doanhSo = originalPrice * qty;
+      const status = m.status ? String(row[m.status] ?? "").trim() : "";
+      const cancelReason = m.cancelReason ? String(row[m.cancelReason] ?? "").trim() : "";
+      const trangThai = deriveOrderStatus(status, cancelReason, soLuongThuc, returnedQty);
+
       records.push({
         date,
         product: m.product ? String(row[m.product] ?? "").trim() || "(Không rõ)" : "(Không rõ)",
         category: m.category ? String(row[m.category] ?? "").trim() || "(Không rõ)" : "(Không rõ)",
         customer: m.customer ? String(row[m.customer] ?? "").trim() || "(Không rõ)" : "(Không rõ)",
-        quantity: quantity ?? 0,
+        quantity: qty,
         price: price ?? 0,
         revenue,
-        status: m.status ? String(row[m.status] ?? "").trim() : "",
+        status,
         orderId: m.orderId ? String(row[m.orderId] ?? "").trim() : "",
-        skuVariant: m.skuVariant ? String(row[m.skuVariant] ?? "").trim() : "",
+        skuVariant,
+        sku,
+        originalPrice,
+        returnedQty,
+        soLuongThuc,
+        doanhSo,
+        trangThai,
       });
     }
     records.sort((a, b) => a.date - b.date);
     dash.records = records;
   }
+
+  const STATUS_ORDER = ["Hoàn thành", "Đang giao", "Hoàn 1 phần", "Hoàn hàng", "Hủy chưa XK", "Hủy sau XK"];
 
   function initDashboardFilters() {
     const cats = Array.from(new Set(dash.records.map(r => r.category))).sort();
@@ -527,23 +559,30 @@
       sel.appendChild(opt);
     });
 
+    const statuses = Array.from(new Set(dash.records.map(r => r.trangThai)))
+      .sort((a, b) => STATUS_ORDER.indexOf(a) - STATUS_ORDER.indexOf(b));
+    const statusSel = el("filterStatus");
+    statusSel.innerHTML = '<option value="">Tất cả</option>';
+    statuses.forEach(s => {
+      const opt = document.createElement("option");
+      opt.value = s; opt.textContent = s;
+      statusSel.appendChild(opt);
+    });
+
     if (dash.records.length) {
       el("filterFrom").value = toInputDate(dash.records[0].date);
       el("filterTo").value = toInputDate(dash.records[dash.records.length - 1].date);
     }
 
-    const hasStatus = !!dash.mapping.status;
-    el("filterCancelledWrap").hidden = !hasStatus;
-    el("filterExcludeCancelled").checked = true;
-
     el("filterFrom").onchange = applyFiltersAndRender;
     el("filterTo").onchange = applyFiltersAndRender;
     el("filterCategory").onchange = applyFiltersAndRender;
-    el("filterExcludeCancelled").onchange = applyFiltersAndRender;
+    el("filterStatus").onchange = applyFiltersAndRender;
     el("btnClearFilter").onclick = () => {
       el("filterFrom").value = dash.records.length ? toInputDate(dash.records[0].date) : "";
       el("filterTo").value = dash.records.length ? toInputDate(dash.records[dash.records.length - 1].date) : "";
       el("filterCategory").value = "";
+      el("filterStatus").value = "";
       applyFiltersAndRender();
     };
     el("tableSearch").oninput = e => { dash.search = e.target.value; dash.page = 1; renderTable(); };
@@ -567,17 +606,15 @@
     const from = parseInputDate(el("filterFrom").value);
     const to = parseInputDate(el("filterTo").value);
     const cat = el("filterCategory").value;
-    const excludeCancelled = !!dash.mapping.status && el("filterExcludeCancelled").checked;
+    const status = el("filterStatus").value;
 
-    let excludedCount = 0;
     dash.filtered = dash.records.filter(r => {
       if (from && r.date < from) return false;
       if (to && r.date > new Date(to.getFullYear(), to.getMonth(), to.getDate(), 23, 59, 59)) return false;
       if (cat && r.category !== cat) return false;
-      if (excludeCancelled && isCancelledStatus(r.status)) { excludedCount++; return false; }
+      if (status && r.trangThai !== status) return false;
       return true;
     });
-    dash.excludedCancelledCount = excludedCount;
 
     dash.page = 1;
     renderKPIs();
@@ -586,25 +623,24 @@
   }
 
   /* ---- KPIs ---- */
+  function sumDoanhSoWhere(data, statuses) {
+    return data.reduce((s, r) => s + (statuses.includes(r.trangThai) ? r.doanhSo : 0), 0);
+  }
+
   function renderKPIs() {
     const data = dash.filtered;
-    const totalRevenue = data.reduce((s, r) => s + r.revenue, 0);
-    const totalQty = data.reduce((s, r) => s + r.quantity, 0);
-    const orders = data.length;
-    const avg = orders ? totalRevenue / orders : 0;
+    const totalDoanhSo = data.reduce((s, r) => s + r.doanhSo, 0);
+    const doanhSoThuan = sumDoanhSoWhere(data, ["Hoàn thành", "Đang giao"]);
+    const doanhSoHuyChuaXK = sumDoanhSoWhere(data, ["Hủy chưa XK"]);
+    const doanhSoHuySauXK = sumDoanhSoWhere(data, ["Hủy sau XK"]);
+    const doanhSoHoan = sumDoanhSoWhere(data, ["Hoàn hàng", "Hoàn 1 phần"]);
 
-    el("kpiRevenue").textContent = fmtNumber(totalRevenue);
-    el("kpiOrders").textContent = orders.toLocaleString("vi-VN");
-    el("kpiQty").textContent = fmtNumber(totalQty);
-    el("kpiAvg").textContent = fmtNumber(avg);
-
-    const excluded = dash.excludedCancelledCount || 0;
-    el("kpiRevenueSub").textContent = excluded
-      ? `${data.length.toLocaleString("vi-VN")} dòng · đã loại ${excluded.toLocaleString("vi-VN")} đơn hủy/hoàn trả`
-      : `${data.length.toLocaleString("vi-VN")} dòng dữ liệu`;
-    el("kpiOrdersSub").textContent = "trong khoảng đã lọc";
-    el("kpiQtySub").textContent = "tổng số lượng bán";
-    el("kpiAvgSub").textContent = "doanh thu / dòng";
+    el("kpiDoanhSo").textContent = fmtNumber(totalDoanhSo);
+    el("kpiDoanhSoThuan").textContent = fmtNumber(doanhSoThuan);
+    el("kpiHuyChuaXK").textContent = fmtNumber(doanhSoHuyChuaXK);
+    el("kpiHuySauXK").textContent = fmtNumber(doanhSoHuySauXK);
+    el("kpiHoan").textContent = fmtNumber(doanhSoHoan);
+    el("kpiDoanhSoSub").textContent = `${data.length.toLocaleString("vi-VN")} dòng dữ liệu`;
   }
 
   /* ---- Charts ---- */
@@ -629,7 +665,7 @@
     const map = new Map();
     dash.filtered.forEach(r => {
       const k = monthKey(r.date);
-      map.set(k, (map.get(k) || 0) + r.revenue);
+      map.set(k, (map.get(k) || 0) + r.doanhSo);
     });
     const labels = Array.from(map.keys()).sort();
     const values = labels.map(k => map.get(k));
@@ -637,7 +673,7 @@
     destroyChart("timeline");
     dash.charts.timeline = new Chart(el("chartTimeline"), {
       type: "line",
-      data: { labels, datasets: [{ label: "Doanh thu", data: values, borderColor: PALETTE[0], backgroundColor: "rgba(58,92,240,0.12)", fill: true, tension: 0.3, pointRadius: 3 }] },
+      data: { labels, datasets: [{ label: "Doanh số", data: values, borderColor: PALETTE[0], backgroundColor: "rgba(58,92,240,0.12)", fill: true, tension: 0.3, pointRadius: 3 }] },
       options: baseOptions({ y: { ticks: { callback: v => fmtNumber(v) } } }),
     });
   }
@@ -646,7 +682,7 @@
     const map = new Map();
     data.forEach(r => {
       const k = keyFn(r);
-      map.set(k, (map.get(k) || 0) + r.revenue);
+      map.set(k, (map.get(k) || 0) + r.doanhSo);
     });
     return Array.from(map.entries()).sort((a, b) => b[1] - a[1]).slice(0, n);
   }
@@ -656,7 +692,7 @@
     destroyChart("topProducts");
     dash.charts.topProducts = new Chart(el("chartTopProducts"), {
       type: "bar",
-      data: { labels: top.map(t => t[0]), datasets: [{ label: "Doanh thu", data: top.map(t => t[1]), backgroundColor: PALETTE[0] }] },
+      data: { labels: top.map(t => t[0]), datasets: [{ label: "Doanh số", data: top.map(t => t[1]), backgroundColor: PALETTE[0] }] },
       options: baseOptions({ y: { ticks: { callback: v => fmtNumber(v) } } }, true),
     });
   }
@@ -676,7 +712,7 @@
     destroyChart("topCustomers");
     dash.charts.topCustomers = new Chart(el("chartTopCustomers"), {
       type: "bar",
-      data: { labels: top.map(t => t[0]), datasets: [{ label: "Doanh thu", data: top.map(t => t[1]), backgroundColor: PALETTE[1] }] },
+      data: { labels: top.map(t => t[0]), datasets: [{ label: "Doanh số", data: top.map(t => t[1]), backgroundColor: PALETTE[1] }] },
       options: baseOptions({ y: { ticks: { callback: v => fmtNumber(v) } } }, true),
     });
   }
@@ -696,25 +732,29 @@
   /* ---- Detail table ---- */
   const TABLE_COLS = [
     { key: "date", label: "Ngày", fmt: d => d.toLocaleDateString("vi-VN") },
-    { key: "orderId", label: "Mã đơn hàng" },
+    { key: "orderId", label: "Mã đơn hàng", show: () => dash.mapping.orderId },
+    { key: "sku", label: "SKU", show: () => dash.mapping.skuVariant },
+    { key: "skuVariant", label: "SKU phân loại", show: () => dash.mapping.skuVariant },
     { key: "product", label: "Sản phẩm" },
     { key: "category", label: "Danh mục" },
     { key: "customer", label: "Khách hàng" },
     { key: "quantity", label: "Số lượng", fmt: v => v.toLocaleString("vi-VN") },
-    { key: "price", label: "Đơn giá", fmt: v => fmtNumber(v) },
-    { key: "revenue", label: "Doanh thu", fmt: v => fmtNumber(v) },
+    { key: "returnedQty", label: "SL hoàn trả", fmt: v => v.toLocaleString("vi-VN"), show: () => dash.mapping.returnedQty },
+    { key: "soLuongThuc", label: "SL thực", fmt: v => v.toLocaleString("vi-VN"), show: () => dash.mapping.returnedQty },
+    { key: "doanhSo", label: "Doanh số", fmt: v => fmtNumber(v) },
+    { key: "trangThai", label: "Trạng thái", show: () => dash.mapping.status || dash.mapping.returnedQty },
   ];
 
   function currentTableRows() {
     if (!dash.search) return dash.filtered;
     const q = stripDiacritics(dash.search);
     return dash.filtered.filter(r =>
-      [r.product, r.category, r.customer, r.orderId].some(v => stripDiacritics(v).includes(q))
+      [r.product, r.category, r.customer, r.orderId, r.sku, r.skuVariant].some(v => stripDiacritics(v).includes(q))
     );
   }
 
   function renderTable() {
-    const cols = TABLE_COLS.filter(c => c.key !== "orderId" || dash.mapping.orderId);
+    const cols = TABLE_COLS.filter(c => !c.show || c.show());
     const thead = document.querySelector("#dataTable thead");
     const tbody = document.querySelector("#dataTable tbody");
     thead.innerHTML = "<tr>" + cols.map(c => `<th>${c.label}</th>`).join("") + "</tr>";
