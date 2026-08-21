@@ -20,7 +20,14 @@ DETAIL_COLUMNS = [
     "date", "orderId", "sku", "skuVariant", "product", "category", "customer",
     "quantity", "returnedQty", "soLuongThuc", "price", "originalPrice",
     "revenue", "doanhSo", "status", "trangThai", "discount", "voucher",
+    "platformFee", "piship",
 ]
+
+# Columns that may be absent on Reports converted before they existed —
+# queried via COALESCE(..., 0) when present, or a literal 0 when the
+# column is missing from every file in parquet_source (see
+# _available_columns / col_or_zero).
+OPTIONAL_NUMERIC_COLUMNS = {"discount", "voucher", "platformFee", "piship"}
 
 ALLOWED_SORT_COLUMNS = {
     "date", "orderId", "product", "category", "customer",
@@ -225,7 +232,7 @@ def run_rows_query(
         offset = (page - 1) * page_size
 
         def col_expr(c: str) -> str:
-            if c in ("discount", "voucher"):
+            if c in OPTIONAL_NUMERIC_COLUMNS:
                 return f'COALESCE("{c}", 0) AS "{c}"' if c in available else f'CAST(0 AS DOUBLE) AS "{c}"'
             return f'"{c}"'
 

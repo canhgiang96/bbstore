@@ -88,3 +88,24 @@ def compute_voucher(shop_voucher: float, order_paid_ratio: float, quantity: floa
     if not quantity:
         return 0.0
     return (shop_voucher * order_paid_ratio / quantity) * so_luong_thuc
+
+
+PISHIP_FEE_PER_ORDER = 1620
+
+
+def compute_platform_fee(fixed_fee: float, service_fee: float, transaction_fee: float, order_paid_ratio: float) -> float:
+    """Phí sàn = (Phí cố định + Phí dịch vụ + Phí xử lý giao dịch), an
+    order-level total Shopee repeats on every line, prorated by
+    order_paid_ratio the same way Voucher is — but NOT scaled by Số lượng
+    thực, since a platform fee already incurred isn't refunded by a return.
+    """
+    return (fixed_fee + service_fee + transaction_fee) * order_paid_ratio
+
+
+def compute_piship_fee(is_first_line_of_order: bool) -> float:
+    """Phí Piship là một khoản phí cố định 1.620 cho mỗi đơn hàng (không
+    nhân theo số dòng sản phẩm) — assigned to just the first surviving line
+    of each order so summing rows gives the correct per-order total instead
+    of double-counting it once per line.
+    """
+    return PISHIP_FEE_PER_ORDER if is_first_line_of_order else 0.0

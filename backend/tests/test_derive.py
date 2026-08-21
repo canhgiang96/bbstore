@@ -4,7 +4,14 @@ verify the JS deriveOrderStatus() during Phase 1 development (see the
 KPI sums: Doanh số 940.000, GMV 360.000, hủy chưa XK 150.000, hủy sau XK
 200.000, hoàn 230.000 — 150.000 + 200.000 + 230.000 + 360.000 = 940.000).
 """
-from app.derive import compute_discount, compute_voucher, derive_order_status, derive_row_fields
+from app.derive import (
+    compute_discount,
+    compute_piship_fee,
+    compute_platform_fee,
+    compute_voucher,
+    derive_order_status,
+    derive_row_fields,
+)
 
 MAPPING = {
     "quantity": "Số lượng",
@@ -111,3 +118,24 @@ def test_compute_voucher_prorated_across_multi_line_order():
 
 def test_compute_voucher_zero_quantity_is_safe():
     assert compute_voucher(shop_voucher=20000, order_paid_ratio=1.0, quantity=0, so_luong_thuc=0) == 0
+
+
+def test_compute_platform_fee_prorated_by_order_paid_ratio():
+    # (Phí cố định + Phí dịch vụ + Phí xử lý giao dịch) x tỉ lệ của đơn.
+    fee = compute_platform_fee(fixed_fee=1000, service_fee=2000, transaction_fee=500, order_paid_ratio=0.4)
+    assert fee == 3500 * 0.4
+
+
+def test_compute_platform_fee_not_scaled_by_returns():
+    # Phí sàn không giảm theo Số lượng thực dù đơn có hoàn hàng — hàm này
+    # không nhận quantity/so_luong_thuc ở tất cả, nên không thể bị ảnh hưởng.
+    fee_full_order = compute_platform_fee(1000, 2000, 500, order_paid_ratio=1.0)
+    assert fee_full_order == 3500
+
+
+def test_compute_piship_fee_first_line_gets_full_amount():
+    assert compute_piship_fee(is_first_line_of_order=True) == 1620
+
+
+def test_compute_piship_fee_other_lines_get_zero():
+    assert compute_piship_fee(is_first_line_of_order=False) == 0

@@ -49,6 +49,9 @@ FIELDS = [
     Field("sellerSubsidy", "Người bán trợ giá"),
     Field("shopVoucher", "Mã giảm giá của Shop"),
     Field("buyerPaidAmount", "Số tiền người mua thanh toán"),
+    Field("fixedFee", "Phí cố định"),
+    Field("serviceFee", "Phí dịch vụ"),
+    Field("transactionFee", "Phí xử lý giao dịch"),
 ]
 
 KEYWORDS = {
@@ -68,6 +71,9 @@ KEYWORDS = {
     "sellerSubsidy": ["nguoi ban tro gia"],
     "shopVoucher": ["ma giam gia cua shop", "ma giam gia shop"],
     "buyerPaidAmount": ["so tien nguoi mua thanh toan"],
+    "fixedFee": ["phi co dinh"],
+    "serviceFee": ["phi dich vu"],
+    "transactionFee": ["phi xu ly giao dich"],
 }
 
 IDENTIFIER_PREFIX = re.compile(r"^(sku|ma|id)\b")

@@ -348,6 +348,8 @@ def test_rows_old_schema_report_without_discount_columns_returns_zero(old_schema
     assert result["total"] == 1
     assert result["rows"][0]["discount"] == 0
     assert result["rows"][0]["voucher"] == 0
+    assert result["rows"][0]["platformFee"] == 0
+    assert result["rows"][0]["piship"] == 0
 
 
 def test_summary_mixed_old_and_new_schema_reports_via_union_by_name(

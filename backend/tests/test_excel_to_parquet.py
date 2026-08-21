@@ -185,3 +185,62 @@ def test_discount_and_voucher_default_to_zero_when_columns_absent():
     df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
     assert (df["discount"] == 0).all()
     assert (df["voucher"] == 0).all()
+
+
+FEE_HEADERS = DISCOUNT_HEADERS + ["Phí cố định", "Phí dịch vụ", "Phí xử lý giao dịch"]
+
+FEE_ROWS = [
+    # F1: 2-line order. Fee columns hold the SAME order-level total on both
+    # lines (1000+2000+500=3500), prorated by paid-amount ratio (40/60).
+    ["F1", "2026-02-01 00:01", "Hoàn thành", "", "A100-1", "SP A", 100000, 2, 0, 4000, 10000, 400000, 1000, 2000, 500],
+    ["F1", "2026-02-01 00:01", "Hoàn thành", "", "B200-1", "SP B", 150000, 1, 0, 1500, 10000, 600000, 1000, 2000, 500],
+    # F2: single-line order -> ratio 100%, and the only (first) line for Piship.
+    ["F2", "2026-02-02 09:00", "Hoàn thành", "", "C300-1", "SP C", 50000, 1, 0, 1000, 5000, 50000, 500, 300, 200],
+]
+
+
+def make_fee_xlsx_bytes():
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "orders"
+    ws.append(FEE_HEADERS)
+    for r in FEE_ROWS:
+        ws.append(r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
+def test_platform_fee_prorated_and_piship_assigned_to_first_line_only():
+    parquet_bytes, row_count, mapping = excel_to_parquet(make_fee_xlsx_bytes())
+    assert row_count == 3
+    assert mapping["fixedFee"] == "Phí cố định"
+    assert mapping["serviceFee"] == "Phí dịch vụ"
+    assert mapping["transactionFee"] == "Phí xử lý giao dịch"
+
+    df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
+    line1 = df[(df["orderId"] == "F1") & (df["skuVariant"] == "A100-1")].iloc[0]
+    line2 = df[(df["orderId"] == "F1") & (df["skuVariant"] == "B200-1")].iloc[0]
+    single = df[df["orderId"] == "F2"].iloc[0]
+
+    # (1000+2000+500)=3500 total order fee, prorated 40%/60% by paid amount.
+    assert line1["platformFee"] == 3500 * 0.4
+    assert line2["platformFee"] == 3500 * 0.6
+    assert single["platformFee"] == 1000  # 500+300+200, ratio 100%
+
+    # Piship (1.620/order, flat) goes to only the first surviving line.
+    assert line1["piship"] == 1620
+    assert line2["piship"] == 0
+    assert single["piship"] == 1620
+
+
+def test_platform_fee_and_piship_default_to_zero_when_columns_absent():
+    parquet_bytes, row_count, mapping = excel_to_parquet(make_xlsx_bytes())
+    assert "fixedFee" not in mapping
+    df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
+    assert (df["platformFee"] == 0).all()
+    # Piship is still assigned per-order regardless of whether fee columns
+    # exist — one row per distinct orderId in this dataset (O1..O6) should
+    # each get 1620 (all single-line orders here).
+    assert (df["piship"] == 1620).all()

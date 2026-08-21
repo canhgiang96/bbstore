@@ -667,6 +667,8 @@
     { key: "doanhSo", label: "Doanh số", fmt: v => fmtNumber(v) },
     { key: "discount", label: "Giảm giá", fmt: v => fmtNumber(v) },
     { key: "voucher", label: "Voucher", fmt: v => fmtNumber(v) },
+    { key: "platformFee", label: "Phí sàn", fmt: v => fmtNumber(v) },
+    { key: "piship", label: "Phí Piship", fmt: v => fmtNumber(v) },
     { key: "trangThai", label: "Trạng thái" },
   ];
 

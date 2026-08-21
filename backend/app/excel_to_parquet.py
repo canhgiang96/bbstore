@@ -15,7 +15,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .derive import compute_discount, compute_voucher, derive_row_fields
+from .derive import compute_discount, compute_piship_fee, compute_platform_fee, compute_voucher, derive_row_fields
 from .mapping import detect_mapping
 from .parsing import parse_date_value, to_number
 
@@ -76,6 +76,7 @@ def build_dashboard_rows(raw_rows: list[dict], mapping: dict) -> list[dict]:
     order_col = mapping.get("orderId")
     paid_col = mapping.get("buyerPaidAmount")
     order_paid_totals = _order_paid_totals(raw_rows, mapping)
+    seen_order_ids: set = set()
     out = []
 
     for row in raw_rows:
@@ -101,6 +102,16 @@ def build_dashboard_rows(raw_rows: list[dict], mapping: dict) -> list[dict]:
         discount = compute_discount(seller_subsidy, derived["quantity"], derived["soLuongThuc"])
         voucher = compute_voucher(shop_voucher, order_paid_ratio, derived["quantity"], derived["soLuongThuc"])
 
+        fixed_fee = to_number(row.get(mapping["fixedFee"])) if mapping.get("fixedFee") else 0.0
+        service_fee = to_number(row.get(mapping["serviceFee"])) if mapping.get("serviceFee") else 0.0
+        transaction_fee = to_number(row.get(mapping["transactionFee"])) if mapping.get("transactionFee") else 0.0
+        platform_fee = compute_platform_fee(fixed_fee, service_fee, transaction_fee, order_paid_ratio)
+
+        order_key = row.get(order_col) if order_col else None
+        is_first_line_of_order = order_key not in seen_order_ids
+        seen_order_ids.add(order_key)
+        piship_fee = compute_piship_fee(is_first_line_of_order)
+
         out.append({
             "date": date,
             "product": _text_or_unknown(row, mapping, "product"),
@@ -120,6 +131,8 @@ def build_dashboard_rows(raw_rows: list[dict], mapping: dict) -> list[dict]:
             "trangThai": derived["trangThai"],
             "discount": discount,
             "voucher": voucher,
+            "platformFee": platform_fee,
+            "piship": piship_fee,
         })
 
     return out
