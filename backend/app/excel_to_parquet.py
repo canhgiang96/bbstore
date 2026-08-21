@@ -133,6 +133,11 @@ def build_dashboard_rows(raw_rows: list[dict], mapping: dict) -> list[dict]:
             "voucher": voucher,
             "platformFee": platform_fee,
             "piship": piship_fee,
+            # Persisted (not just used transiently here) so query_engine.py
+            # can later join in order-level values from OTHER reports (e.g.
+            # Phí AFF from Dòng tiền) at query time and prorate them the same
+            # way Voucher/Phí sàn already are.
+            "orderPaidRatio": order_paid_ratio,
         })
 
     return out

@@ -20,13 +20,15 @@ DETAIL_COLUMNS = [
     "date", "orderId", "sku", "skuVariant", "product", "category", "customer",
     "quantity", "returnedQty", "soLuongThuc", "price", "originalPrice",
     "revenue", "doanhSo", "status", "trangThai", "discount", "voucher",
-    "platformFee", "piship",
+    "platformFee", "piship", "phiAff",
 ]
 
 # Columns that may be absent on Reports converted before they existed —
 # queried via COALESCE(..., 0) when present, or a literal 0 when the
 # column is missing from every file in parquet_source (see
-# _available_columns / col_or_zero).
+# _available_columns / col_or_zero). "phiAff" isn't a literal Orders column
+# at all — it's computed via the Cashflow join (see _cashflow_join) — so it
+# isn't in this set even though it gets the same "default to 0" treatment.
 OPTIONAL_NUMERIC_COLUMNS = {"discount", "voucher", "platformFee", "piship"}
 
 ALLOWED_SORT_COLUMNS = {
@@ -37,7 +39,11 @@ ALLOWED_SORT_COLUMNS = {
 GMV_STATUSES_SQL = "('Hoàn thành', 'Đang giao', 'Hoàn 1 phần')"
 
 EMPTY_SUMMARY = {
-    "kpis": {"doanhSo": 0, "gmv": 0, "huyChuaXK": 0, "huySauXK": 0, "hoan": 0, "discount": 0, "voucher": 0, "nmv": 0, "rowCount": 0},
+    "kpis": {
+        "doanhSo": 0, "gmv": 0, "huyChuaXK": 0, "huySauXK": 0, "hoan": 0,
+        "discount": 0, "voucher": 0, "platformFee": 0, "piship": 0, "phiAff": 0,
+        "nmv": 0, "rowCount": 0,
+    },
     "timeline": [],
     "topProducts": [],
     "categoryBreakdown": [],
@@ -115,7 +121,34 @@ def _available_columns(con, parquet_source) -> set:
     return {d[0] for d in cur.description}
 
 
-def run_summary_query(parquet_source, from_date=None, to_date=None, category=None, status=None) -> dict:
+def _cashflow_join(available: set, cashflow_source) -> tuple[str, list, str]:
+    """Returns (join_sql, join_params, aff_expr) to LEFT JOIN per-order Phí
+    AFF from ready Cashflow Reports into an Orders query whose FROM clause
+    is aliased "o". aff_expr is always safe to use unconditionally — it's a
+    literal "0" when there's no cashflow data yet, or when this Orders
+    Report predates the "orderPaidRatio" column (same backward-compat
+    pattern as discount/voucher/platformFee/piship).
+
+    The GROUP BY in the subquery guards against the same Mã đơn hàng
+    appearing in more than one uploaded Cashflow Report — summed once
+    before the join, not double-counted per Orders line.
+    """
+    order_ratio_col = 'COALESCE(o."orderPaidRatio", 0)' if "orderPaidRatio" in available else "0"
+    if not cashflow_source:
+        return "", [], "0"
+    join_sql = (
+        'LEFT JOIN ('
+        'SELECT "orderId" AS cf_order_id, SUM("phiAff") AS cf_phi_aff '
+        'FROM read_parquet(?, union_by_name=true) GROUP BY "orderId"'
+        ') cf ON o."orderId" = cf.cf_order_id'
+    )
+    aff_expr = f'({order_ratio_col} * COALESCE(cf.cf_phi_aff, 0))'
+    return join_sql, [cashflow_source], aff_expr
+
+
+def run_summary_query(
+    parquet_source, from_date=None, to_date=None, category=None, status=None, cashflow_source=None,
+) -> dict:
     if _is_empty_source(parquet_source):
         return EMPTY_SUMMARY
 
@@ -125,6 +158,9 @@ def run_summary_query(parquet_source, from_date=None, to_date=None, category=Non
         available = _available_columns(con, parquet_source)
         discount_col = 'COALESCE("discount", 0)' if "discount" in available else "0"
         voucher_col = 'COALESCE("voucher", 0)' if "voucher" in available else "0"
+        platform_fee_col = 'COALESCE("platformFee", 0)' if "platformFee" in available else "0"
+        piship_col = 'COALESCE("piship", 0)' if "piship" in available else "0"
+        cf_join_sql, cf_join_params, aff_expr = _cashflow_join(available, cashflow_source)
 
         totals_sql = f"""
             SELECT
@@ -135,11 +171,16 @@ def run_summary_query(parquet_source, from_date=None, to_date=None, category=Non
               COALESCE(SUM("originalPrice" * "returnedQty"), 0) AS hoan,
               COALESCE(SUM(CASE WHEN "trangThai" IN {GMV_STATUSES_SQL} THEN {discount_col} ELSE 0 END), 0) AS discount,
               COALESCE(SUM(CASE WHEN "trangThai" IN {GMV_STATUSES_SQL} THEN {voucher_col} ELSE 0 END), 0) AS voucher,
+              COALESCE(SUM({platform_fee_col}), 0) AS platform_fee,
+              COALESCE(SUM({piship_col}), 0) AS piship,
+              COALESCE(SUM({aff_expr}), 0) AS phi_aff,
               COUNT(*) AS row_count
-            FROM read_parquet(?, union_by_name=true) WHERE {where_sql}
+            FROM read_parquet(?, union_by_name=true) o
+            {cf_join_sql}
+            WHERE {where_sql}
         """
-        total, gmv, huy_chua_xk, huy_sau_xk, hoan, discount, voucher, row_count = con.execute(
-            totals_sql, [parquet_source, *params]
+        total, gmv, huy_chua_xk, huy_sau_xk, hoan, discount, voucher, platform_fee, piship, phi_aff, row_count = con.execute(
+            totals_sql, [parquet_source, *cf_join_params, *params]
         ).fetchone()
         nmv = gmv - discount - voucher
 
@@ -181,6 +222,9 @@ def run_summary_query(parquet_source, from_date=None, to_date=None, category=Non
                 "hoan": hoan,
                 "discount": discount,
                 "voucher": voucher,
+                "platformFee": platform_fee,
+                "piship": piship,
+                "phiAff": phi_aff,
                 "nmv": nmv,
                 "rowCount": row_count,
             },
@@ -201,6 +245,7 @@ def run_rows_query(
     parquet_source,
     from_date=None, to_date=None, category=None, status=None,
     search=None, sort="date", sort_dir="asc", page=1, page_size=15,
+    cashflow_source=None,
 ) -> dict:
     page = max(1, page)
     if _is_empty_source(parquet_source):
@@ -210,6 +255,7 @@ def run_rows_query(
     try:
         where_sql, params = _where_clause(from_date, to_date, category, status)
         available = _available_columns(con, parquet_source)
+        cf_join_sql, cf_join_params, aff_expr = _cashflow_join(available, cashflow_source)
 
         if search:
             where_sql += (
@@ -221,7 +267,7 @@ def run_rows_query(
             params.extend([like] * 6)
 
         total = con.execute(
-            f'SELECT COUNT(*) FROM read_parquet(?, union_by_name=true) WHERE {where_sql}',
+            f'SELECT COUNT(*) FROM read_parquet(?, union_by_name=true) o WHERE {where_sql}',
             [parquet_source, *params],
         ).fetchone()[0]
 
@@ -232,6 +278,8 @@ def run_rows_query(
         offset = (page - 1) * page_size
 
         def col_expr(c: str) -> str:
+            if c == "phiAff":
+                return f'{aff_expr} AS "phiAff"'
             if c in OPTIONAL_NUMERIC_COLUMNS:
                 return f'COALESCE("{c}", 0) AS "{c}"' if c in available else f'CAST(0 AS DOUBLE) AS "{c}"'
             return f'"{c}"'
@@ -239,14 +287,16 @@ def run_rows_query(
         cols_sql = ", ".join(col_expr(c) for c in DETAIL_COLUMNS)
         rows_sql = f"""
             SELECT {cols_sql}
-            FROM read_parquet(?, union_by_name=true) WHERE {where_sql}
+            FROM read_parquet(?, union_by_name=true) o
+            {cf_join_sql}
+            WHERE {where_sql}
             ORDER BY "{sort_col}" {sort_dir_sql}
             LIMIT ? OFFSET ?
         """
         # .fetchall() (not .fetchdf()) so values come back as plain Python
         # types (int/float/str/datetime) — a pandas DataFrame would give us
         # numpy/pandas types that FastAPI's JSON encoder can choke on.
-        cursor = con.execute(rows_sql, [parquet_source, *params, page_size, offset])
+        cursor = con.execute(rows_sql, [parquet_source, *cf_join_params, *params, page_size, offset])
         col_names = [d[0] for d in cursor.description]
         rows = [dict(zip(col_names, r)) for r in cursor.fetchall()]
 

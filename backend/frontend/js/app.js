@@ -47,9 +47,7 @@
   const UNTAGGED_BATCH_LABEL = "(Thêm thủ công / không rõ nguồn)";
   function batchLabel(row) { return row.__sourceFile || UNTAGGED_BATCH_LABEL; }
 
-  /* ================= Store metadata (Master/Combo/Dòng tiền/Điều chỉnh — Orders is now API-backed, not a generic store) ================= */
-  const CASHFLOW_HEADERS = ["Mã giao dịch", "Đơn hàng / Sản phẩm", "Mã đơn hàng", "Mã Số Thuế", "Mã yêu cầu hoàn tiền", "Mã sản phẩm", "Tên sản phẩm", "Ngày đặt hàng", "Ngày hoàn thành thanh toán", "Phương thức thanh toán", "Phân Loại", "Sản Phẩm Bán Chạy", "Tổng tiền đã thanh toán", "Giá sản phẩm", "Số tiền hoàn lại", "Phí vận chuyển Người mua trả", "Phí vận chuyển thực tế", "Phí vận chuyển được trợ giá từ Shopee", "Phí vận chuyển trả hàng (đơn Trả hàng/hoàn tiền)", "Phí vận chuyển được hoàn bởi PiShip", "Phí vận chuyển trả hàng (đơn giao không thành công)", "Sản phẩm được trợ giá từ Shopee", "Mã ưu đãi do Người Bán chịu", "Mã ưu đãi Đồng Tài Trợ do Người Bán chịu", "Mã hoàn xu do Người Bán chịu", "Mã hoàn xu Đồng Tài Trợ do Người Bán chịu", "Phí cố định", "Phí Dịch Vụ", "Phí xử lý giao dịch", "Phí hoa hồng Tiếp thị liên kết", "Phí dịch vụ PiShip", "Phí dịch vụ hiển thị NTTD (từ doanh thu đơn hàng)", "Thuế GTGT", "Thuế TNCN", "Phí lắp đặt người mua trả", "Phí lắp đặt thực tế", "Trade-in Bonus by Seller", "Người Mua", "Amount Paid By Buyer", "Transaction Fee Rate (%)", "Phương thức thanh toán của Người mua", "Buyer Payment Method Details_1", "Installment Plan (if applicable)", "Phí vận chuyển - Người bán hỗ trợ", "Đơn vị vận chuyển", "Courier Name", "Mã voucher", "Đền bù đơn mất hàng", "Giá sản phẩm (sau khuyến mãi)", "Shopee xu", "Shopee voucher", "Ngân hàng khuyến mãi thanh toán trên Thẻ Tín Dụng", "Shopee khuyến mãi thanh toán trên Thẻ Tín Dụng"];
-
+  /* ================= Store metadata (Master/Combo/Điều chỉnh — Orders and Dòng tiền are API-backed, not a generic store) ================= */
   const STORE_META = {
     master: {
       label: "Master File",
@@ -61,7 +59,6 @@
       headers: ["PHÂN LOẠI", "Tỉ lệ SKU 1", "Tỉ lệ SKU 2", "Tỉ lệ SKU 3", "SKU1", "SKU2", "SKU3", "SKU COMBO", "Giá vốn SKU 1", "Giá vốn SKU 2", "Giá vốn SKU 3", "Giá vốn"],
       primaryKeyHeader: "SKU COMBO",
     },
-    cashflow: { label: "Dòng tiền", headers: CASHFLOW_HEADERS, primaryKeyHeader: "Mã đơn hàng" },
     adjustments: {
       label: "Điều chỉnh doanh thu",
       headers: ["Mã giao dịch", "Ngày hoàn thành điều chỉnh đơn hàng", "Loại điều chỉnh | Mô tả", "Lý do điều chỉnh", "Số tiền điều chỉnh", "Mã đơn hàng liên quan", "Ngày hoàn thành thanh toán"],
@@ -449,6 +446,113 @@
     reports.filter(r => r.status === "processing").forEach(r => pollReportStatus(r.id));
   }
 
+  /* ================= Dòng tiền / Cashflow Reports tab (API-backed) — mirrors
+     the Orders tab above 1:1, pointed at /api/cashflow-reports. Cashflow
+     Reports exist solely to supply Phí AFF for the Orders Dashboard's
+     query-time join, so uploading/deleting one also refreshes the Dashboard. ================= */
+  let cashflowPollTimers = {};
+
+  function wireCashflowTab() {
+    const dz = el("cashflowUploadDropzone");
+    const input = el("cashflowUploadInput");
+    if (!API.isAdmin()) {
+      dz.hidden = true;
+    } else {
+      ["dragenter", "dragover"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add("dragover"); }));
+      ["dragleave", "drop"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove("dragover"); }));
+      dz.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) handleCashflowUpload(f); });
+      input.addEventListener("change", e => {
+        const f = e.target.files[0];
+        if (f) handleCashflowUpload(f);
+        input.value = "";
+      });
+    }
+    refreshCashflowReportsList();
+  }
+
+  async function handleCashflowUpload(file) {
+    const box = el("cashflowUploadSummary");
+    box.className = "import-summary";
+    box.textContent = `Đang tải lên "${file.name}"...`;
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await API.apiFetch("/api/cashflow-reports", { method: "POST", body: formData });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Lỗi ${res.status}`);
+      }
+      const created = await res.json();
+      box.className = "import-summary ok";
+      box.textContent = `Đã tải lên — đang xử lý...`;
+      await refreshCashflowReportsList();
+      pollCashflowStatus(created.id);
+    } catch (err) {
+      box.className = "import-summary err";
+      box.textContent = "Lỗi tải lên: " + err.message;
+    }
+  }
+
+  function pollCashflowStatus(reportId) {
+    if (cashflowPollTimers[reportId]) clearInterval(cashflowPollTimers[reportId]);
+    cashflowPollTimers[reportId] = setInterval(async () => {
+      try {
+        const report = await API.apiJson(`/api/cashflow-reports/${reportId}`);
+        if (report.status !== "processing") {
+          clearInterval(cashflowPollTimers[reportId]);
+          delete cashflowPollTimers[reportId];
+          await refreshCashflowReportsList();
+          if (report.status === "ready") refreshDashboard(); // Phí AFF now includes it
+        }
+      } catch (e) { /* transient — keep polling */ }
+    }, 2500);
+  }
+
+  async function refreshCashflowReportsList() {
+    const isAdmin = API.isAdmin();
+    let reports;
+    try {
+      reports = await API.apiJson("/api/cashflow-reports");
+    } catch (e) {
+      el("cashflowReportsListBody").innerHTML = `<p class="muted">Không tải được danh sách Report: ${escapeHtml(e.message)}</p>`;
+      return;
+    }
+    el("cashflowReportsListCount").textContent = `${reports.length.toLocaleString("vi-VN")} Report`;
+
+    const body = el("cashflowReportsListBody");
+    if (!reports.length) {
+      body.innerHTML = `<p class="muted" style="padding:16px;">Chưa có Report nào.</p>`;
+      return;
+    }
+
+    body.innerHTML = `<div class="table-scroll"><table><thead><tr>
+        <th>Report</th><th>Trạng thái</th><th>Số dòng</th><th>Tải lên lúc</th>${isAdmin ? "<th>Thao tác</th>" : ""}
+      </tr></thead><tbody>` + reports.map(r => `
+        <tr>
+          <td>${escapeHtml(r.name)}</td>
+          <td>${STATUS_BADGE[r.status] || escapeHtml(r.status)}${r.status === "failed" && r.error_message ? `<div class="muted" style="margin-top:4px;">${escapeHtml(r.error_message)}</div>` : ""}</td>
+          <td>${r.row_count != null ? r.row_count.toLocaleString("vi-VN") : "–"}</td>
+          <td>${new Date(r.uploaded_at).toLocaleString("vi-VN")}</td>
+          ${isAdmin ? `<td><button class="btn btn-danger btn-sm" data-del="${escapeHtml(r.id)}">Xóa</button></td>` : ""}
+        </tr>
+      `).join("") + `</tbody></table></div>`;
+
+    if (isAdmin) {
+      body.querySelectorAll("button[data-del]").forEach(btn => {
+        btn.onclick = async () => {
+          const id = btn.dataset.del;
+          const report = reports.find(r => r.id === id);
+          if (!confirm(`Xóa toàn bộ Report "${report ? report.name : id}"? Hành động này không thể hoàn tác.`)) return;
+          await API.apiJson(`/api/cashflow-reports/${id}`, { method: "DELETE" });
+          await refreshCashflowReportsList();
+          refreshDashboard();
+        };
+      });
+    }
+
+    reports.filter(r => r.status === "processing").forEach(r => pollCashflowStatus(r.id));
+  }
+
   /* ================= Dashboard (aggregates every ready Report — see
      /api/dashboard/summary + /rows; the date/category/status filters below
      are how the user narrows the view, not a per-Report picker) ================= */
@@ -589,6 +693,9 @@
     el("kpiHuyChuaXK").textContent = fmtNumber(kpis.huyChuaXK);
     el("kpiHuySauXK").textContent = fmtNumber(kpis.huySauXK);
     el("kpiHoan").textContent = fmtNumber(kpis.hoan);
+    el("kpiPlatformFee").textContent = fmtNumber(kpis.platformFee);
+    el("kpiPiship").textContent = fmtNumber(kpis.piship);
+    el("kpiPhiAff").textContent = fmtNumber(kpis.phiAff);
     el("kpiDoanhSoSub").textContent = `${kpis.rowCount.toLocaleString("vi-VN")} dòng dữ liệu`;
   }
 
@@ -669,6 +776,7 @@
     { key: "voucher", label: "Voucher", fmt: v => fmtNumber(v) },
     { key: "platformFee", label: "Phí sàn", fmt: v => fmtNumber(v) },
     { key: "piship", label: "Phí Piship", fmt: v => fmtNumber(v) },
+    { key: "phiAff", label: "Phí AFF", fmt: v => fmtNumber(v) },
     { key: "trangThai", label: "Trạng thái" },
   ];
 
@@ -710,6 +818,7 @@
     Object.keys(STORE_META).forEach(setupDataManager);
     wireRowModal();
     wireOrdersTab();
+    wireCashflowTab();
     showApp();
     refreshDashboard();
   }

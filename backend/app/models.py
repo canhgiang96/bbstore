@@ -63,6 +63,9 @@ class KpiOut(BaseModel):
     hoan: float
     discount: float
     voucher: float
+    platformFee: float
+    piship: float
+    phiAff: float
     nmv: float
     rowCount: int
 

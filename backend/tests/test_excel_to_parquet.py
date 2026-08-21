@@ -174,6 +174,12 @@ def test_discount_and_voucher_prorated_across_multi_line_order():
     assert single["voucher"] == 5000
     assert single["discount"] == 1000
 
+    # orderPaidRatio is persisted per row (not just used transiently) so the
+    # query-time Phí AFF join can reuse the exact same proration.
+    assert line1["orderPaidRatio"] == 0.3
+    assert line2["orderPaidRatio"] == 0.7
+    assert single["orderPaidRatio"] == 1.0
+
 
 def test_discount_and_voucher_default_to_zero_when_columns_absent():
     # Existing Reports converted before this feature has no "Người bán trợ

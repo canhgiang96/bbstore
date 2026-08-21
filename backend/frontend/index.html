@@ -137,6 +137,24 @@
         </div>
       </div>
 
+      <div class="kpi-grid kpi-grid-3">
+        <div class="kpi-card">
+          <div class="kpi-label">Phí sàn</div>
+          <div class="kpi-value" id="kpiPlatformFee">–</div>
+          <div class="kpi-sub">Phí cố định + Phí dịch vụ + Phí xử lý giao dịch</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Phí Piship</div>
+          <div class="kpi-value" id="kpiPiship">–</div>
+          <div class="kpi-sub">1.620 / đơn hàng</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Phí AFF</div>
+          <div class="kpi-value" id="kpiPhiAff">–</div>
+          <div class="kpi-sub">Phí hoa hồng Tiếp thị liên kết</div>
+        </div>
+      </div>
+
       <div class="chart-grid">
         <div class="card chart-card chart-wide">
           <h3>Doanh số theo thời gian</h3>
@@ -200,10 +218,33 @@
     </div>
   </section>
 
-  <!-- ============ DATA MANAGER TABS (master, combo, cashflow, adjustments) ============ -->
+  <!-- ============ DÒNG TIỀN / CASHFLOW REPORTS TAB (server-backed — supplies Phí AFF for the Orders Dashboard's join) ============ -->
+  <section class="tab-panel" id="panel-cashflow" hidden>
+    <div class="data-panel-header">
+      <h2>Dòng tiền — Report</h2>
+    </div>
+
+    <div class="drop-zone" id="cashflowUploadDropzone">
+      <div class="drop-zone-icon">📁</div>
+      <h2>Kéo thả file Excel vào đây</h2>
+      <p>hoặc</p>
+      <label class="btn btn-primary" for="cashflowUploadInput">Chọn file (.xlsx, .xls, .csv)</label>
+      <input type="file" id="cashflowUploadInput" accept=".xlsx,.xls,.csv" hidden />
+      <div class="import-summary" id="cashflowUploadSummary"></div>
+    </div>
+
+    <div class="card table-card">
+      <div class="table-card-header">
+        <h3>Danh sách Report</h3>
+        <span class="muted" id="cashflowReportsListCount"></span>
+      </div>
+      <div id="cashflowReportsListBody"></div>
+    </div>
+  </section>
+
+  <!-- ============ DATA MANAGER TABS (master, combo, adjustments) ============ -->
   <section class="tab-panel" id="panel-master" hidden></section>
   <section class="tab-panel" id="panel-combo" hidden></section>
-  <section class="tab-panel" id="panel-cashflow" hidden></section>
   <section class="tab-panel" id="panel-adjustments" hidden></section>
 
 </main>
@@ -229,8 +270,8 @@
   </div>
 </div>
 
-<script src="js/db.js?v=12"></script>
-<script src="js/api.js?v=12"></script>
-<script src="js/app.js?v=12"></script>
+<script src="js/db.js?v=13"></script>
+<script src="js/api.js?v=13"></script>
+<script src="js/app.js?v=13"></script>
 </body>
 </html>

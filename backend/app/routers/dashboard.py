@@ -31,6 +31,16 @@ async def _all_ready_parquet_paths() -> list:
     return [get_local_parquet(r["id"], r["parquet_key"]) for r in reports if r.get("parquet_key")]
 
 
+async def _all_ready_cashflow_parquet_paths() -> list:
+    """Every ready Cashflow (Dòng tiền) Report's Parquet — joined into the
+    Orders query at query time for Phí AFF (see query_engine._cashflow_join),
+    not at Orders-conversion time, so uploading Dòng tiền later still applies
+    to Orders Reports that were converted before it existed.
+    """
+    reports = await db.pg_select("cashflow_reports", {"status": "eq.ready", "select": "id,parquet_key"})
+    return [get_local_parquet(r["id"], r["parquet_key"]) for r in reports if r.get("parquet_key")]
+
+
 @dashboard_router.get("/summary", response_model=SummaryOut)
 async def dashboard_summary(
     from_: Optional[str] = Query(None, alias="from"),
@@ -40,7 +50,10 @@ async def dashboard_summary(
     user: dict = Depends(get_current_user),
 ):
     paths = await _all_ready_parquet_paths()
-    return run_summary_query(paths, from_date=from_, to_date=to, category=category, status=status)
+    cashflow_paths = await _all_ready_cashflow_parquet_paths()
+    return run_summary_query(
+        paths, from_date=from_, to_date=to, category=category, status=status, cashflow_source=cashflow_paths,
+    )
 
 
 @dashboard_router.get("/rows", response_model=RowsOut)
@@ -57,9 +70,11 @@ async def dashboard_rows(
     user: dict = Depends(get_current_user),
 ):
     paths = await _all_ready_parquet_paths()
+    cashflow_paths = await _all_ready_cashflow_parquet_paths()
     return run_rows_query(
         paths, from_date=from_, to_date=to, category=category, status=status,
         search=search, sort=sort, sort_dir=sort_dir, page=page, page_size=pageSize,
+        cashflow_source=cashflow_paths,
     )
 
 
@@ -74,7 +89,10 @@ async def summary(
 ):
     report = await _get_ready_report(report_id)
     path = get_local_parquet(report_id, report["parquet_key"])
-    return run_summary_query(path, from_date=from_, to_date=to, category=category, status=status)
+    cashflow_paths = await _all_ready_cashflow_parquet_paths()
+    return run_summary_query(
+        path, from_date=from_, to_date=to, category=category, status=status, cashflow_source=cashflow_paths,
+    )
 
 
 @router.get("/{report_id}/rows", response_model=RowsOut)
@@ -93,7 +111,9 @@ async def rows(
 ):
     report = await _get_ready_report(report_id)
     path = get_local_parquet(report_id, report["parquet_key"])
+    cashflow_paths = await _all_ready_cashflow_parquet_paths()
     return run_rows_query(
         path, from_date=from_, to_date=to, category=category, status=status,
         search=search, sort=sort, sort_dir=sort_dir, page=page, page_size=pageSize,
+        cashflow_source=cashflow_paths,
     )

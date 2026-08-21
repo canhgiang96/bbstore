@@ -374,3 +374,72 @@ def test_rows_mixed_old_and_new_schema_reports_via_union_by_name(
     assert by_sku["X1-1"]["discount"] == 0
     assert by_sku["X1-1"]["voucher"] == 0
     assert by_sku["A100-1"]["discount"] == 4000
+
+
+# ---- Phí AFF (Cashflow join) ----
+# parquet_path_with_discounts has Mã đơn hàng "D1" as a 2-line order:
+# line A100-1 (buyerPaid 400.000, ratio 0.4), line B200-1 (buyerPaid
+# 600.000, ratio 0.6) — persisted as orderPaidRatio on each row.
+
+def _write_cashflow_parquet(rows: list[dict]) -> str:
+    return _write_raw_parquet(rows)
+
+
+@pytest.fixture
+def cashflow_parquet_path():
+    path = _write_cashflow_parquet([{"orderId": "D1", "phiAff": 2000.0}])
+    yield path
+    os.remove(path)
+
+
+def test_summary_phi_aff_prorated_across_multi_line_order(parquet_path_with_discounts, cashflow_parquet_path):
+    result = run_summary_query(parquet_path_with_discounts, cashflow_source=[cashflow_parquet_path])
+    # 2000 split 0.4/0.6 across the order's two lines -> sums back to 2000.
+    assert result["kpis"]["phiAff"] == 2000
+
+
+def test_rows_phi_aff_prorated_across_multi_line_order(parquet_path_with_discounts, cashflow_parquet_path):
+    result = run_rows_query(parquet_path_with_discounts, page_size=10, cashflow_source=[cashflow_parquet_path])
+    by_sku = {r["skuVariant"]: r for r in result["rows"]}
+    assert by_sku["A100-1"]["phiAff"] == 2000 * 0.4
+    assert by_sku["B200-1"]["phiAff"] == 2000 * 0.6
+
+
+def test_summary_phi_aff_is_zero_when_no_cashflow_data(parquet_path_with_discounts):
+    result = run_summary_query(parquet_path_with_discounts, cashflow_source=None)
+    assert result["kpis"]["phiAff"] == 0
+    result_empty_list = run_summary_query(parquet_path_with_discounts, cashflow_source=[])
+    assert result_empty_list["kpis"]["phiAff"] == 0
+
+
+def test_rows_phi_aff_is_zero_when_no_cashflow_data(parquet_path_with_discounts):
+    result = run_rows_query(parquet_path_with_discounts, page_size=10, cashflow_source=None)
+    assert all(r["phiAff"] == 0 for r in result["rows"])
+
+
+def test_summary_phi_aff_zero_for_orders_report_missing_order_paid_ratio(
+    old_schema_parquet_path, cashflow_parquet_path
+):
+    # old_schema_parquet_path has no "orderPaidRatio" column at all (it
+    # predates this feature) — cashflow data existing must not error, and
+    # must not misattribute Phí AFF to a report that can't prorate it.
+    result = run_summary_query(old_schema_parquet_path, cashflow_source=[cashflow_parquet_path])
+    assert result["kpis"]["phiAff"] == 0
+
+
+def test_summary_phi_aff_summed_across_duplicate_orderid_in_multiple_cashflow_reports(
+    parquet_path_with_discounts,
+):
+    # The same Mã đơn hàng "D1" appears in two different ready Cashflow
+    # Reports — must be summed once (via GROUP BY) before the join, not
+    # double-counted per Orders line.
+    path_a = _write_cashflow_parquet([{"orderId": "D1", "phiAff": 2000.0}])
+    path_b = _write_cashflow_parquet([{"orderId": "D1", "phiAff": 500.0}])
+    try:
+        result = run_summary_query(
+            parquet_path_with_discounts, cashflow_source=[path_a, path_b],
+        )
+        assert result["kpis"]["phiAff"] == 2500
+    finally:
+        os.remove(path_a)
+        os.remove(path_b)
