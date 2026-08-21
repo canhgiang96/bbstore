@@ -406,9 +406,37 @@
     excludedCancelledCount: 0,
   };
 
+  // A machine with no local data falls back to the last snapshot published via
+  // "Xuất báo cáo" (see wireSnapshotExport) and committed to data/orders.json —
+  // this is how other devices get to view the dashboard on a static, no-backend site.
+  const SNAPSHOT_URL = "data/orders.json";
+
   async function refreshDashboard() {
-    const rows = await DB.getAllWithKeys("orders");
+    const localRows = await DB.getAllWithKeys("orders");
+    let rows = localRows;
+    let source = "local";
+    let publishedMapping = null;
+    let publishedAt = null;
+
+    if (!localRows.length) {
+      try {
+        const res = await fetch(SNAPSHOT_URL, { cache: "no-store" });
+        if (res.ok) {
+          const snap = await res.json();
+          if (Array.isArray(snap.rows) && snap.rows.length) {
+            rows = snap.rows.map(v => ({ key: null, value: v }));
+            publishedMapping = snap.mapping || null;
+            publishedAt = snap.exportedAt || null;
+            source = "published";
+          }
+        }
+      } catch (e) { /* no published snapshot available yet */ }
+    }
+
     dash.raw = rows;
+    dash.source = source;
+    dash.publishedAt = publishedAt;
+    el("btnExportSnapshot").hidden = source !== "local";
 
     if (!rows.length) {
       el("dashboardEmpty").hidden = false;
@@ -420,7 +448,7 @@
 
     const headers = inferColumns(rows);
     const auto = detectMapping(headers);
-    const override = loadMappingOverride();
+    const override = source === "published" ? publishedMapping : loadMappingOverride();
     const mapping = {};
     FIELDS.forEach(f => {
       mapping[f.key] = override ? (override[f.key] || "") : (auto[f.key] || "");
@@ -435,7 +463,29 @@
 
   function renderMappingBanner() {
     const parts = FIELDS.filter(f => dash.mapping[f.key]).map(f => `${f.label} = ${dash.mapping[f.key]}`);
-    el("mappingBannerText").textContent = "Đã nhận diện cột: " + (parts.length ? parts.join(" · ") : "chưa nhận diện được cột nào");
+    let text = "Đã nhận diện cột: " + (parts.length ? parts.join(" · ") : "chưa nhận diện được cột nào");
+    if (dash.source === "published") {
+      const when = dash.publishedAt ? new Date(dash.publishedAt).toLocaleString("vi-VN") : "không rõ thời điểm";
+      text = `📡 Đang xem báo cáo đã publish lúc ${when} — ${text}`;
+    }
+    el("mappingBannerText").textContent = text;
+  }
+
+  function wireSnapshotExport() {
+    el("btnExportSnapshot").onclick = () => {
+      const payload = {
+        exportedAt: new Date().toISOString(),
+        mapping: dash.mapping,
+        rows: dash.raw.map(r => r.value),
+      };
+      const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "orders.json";
+      a.click();
+      URL.revokeObjectURL(url);
+    };
   }
 
   function buildDashboardRecords() {
@@ -765,6 +815,7 @@
     Object.keys(STORE_META).forEach(setupDataManager);
     wireRowModal();
     wireMappingModal();
+    wireSnapshotExport();
 
     el("btnSample").addEventListener("click", async () => {
       await DB.bulkPut("orders", generateSampleRows());

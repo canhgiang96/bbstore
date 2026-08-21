@@ -50,6 +50,17 @@ Không bắt buộc phải có đủ tất cả các cột — chỉ cần cột
 
 Dữ liệu lưu trong IndexedDB chỉ tồn tại **trên trình duyệt/máy hiện tại** — mở trang bằng trình duyệt khác hoặc máy khác sẽ không thấy dữ liệu cũ. Đây chưa phải nơi ghép nối (join) dữ liệu giữa 5 loại file để tính lợi nhuận thực — phần đó sẽ được bổ sung sau khi có công thức tính toán cụ thể.
 
+## Cho máy khác xem Dashboard (publish báo cáo)
+
+Trang là static site nên không tự đồng bộ dữ liệu giữa các máy theo thời gian thực. Để máy khác xem được Dashboard:
+
+1. Trên máy có dữ liệu (đã upload ở tab **Đơn hàng**), vào tab **Dashboard**, bấm **📤 Xuất báo cáo** — tải về file `orders.json`.
+2. Đặt file này vào `data/orders.json` trong thư mục dự án, rồi commit + push lên GitHub (hoặc gửi file cho Claude để publish giúp).
+3. Sau khi GitHub Pages deploy xong, bất kỳ máy nào **chưa có dữ liệu cục bộ** mở trang sẽ tự động thấy Dashboard dựa trên báo cáo đã publish (banner hiển thị "📡 Đang xem báo cáo đã publish lúc ..."), ở chế độ chỉ xem.
+4. Máy nào **đã có dữ liệu riêng** trong IndexedDB vẫn luôn ưu tiên xem dữ liệu cục bộ của máy đó (không bị ghi đè bởi báo cáo đã publish).
+
+Mỗi lần dữ liệu đơn hàng thay đổi và muốn cập nhật cho người xem khác, lặp lại bước 1–2.
+
 ## Deploy lên GitHub Pages
 
 1. Vào **Settings → Pages** của repository
