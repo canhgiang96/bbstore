@@ -544,15 +544,21 @@
   async function fetchAndRenderSummary() {
     const seq = ++dash.summarySeq;
     const params = currentFilterParams();
-    const summary = await API.apiJson(`/api/dashboard/summary?${params.toString()}`);
-    if (seq !== dash.summarySeq) return; // a newer request already superseded this one
-    renderKPIs(summary.kpis);
-    renderFacets(summary.facets);
-    renderCharts(summary);
-    // TEMP DEBUG — remove once the filter issue is confirmed fixed.
     const debugEl = el("dashboardFilterDebug");
-    if (debugEl) {
-      debugEl.textContent = `[debug] gửi: /api/dashboard/summary?${params.toString()} → server trả về ${summary.kpis.rowCount} dòng, doanhSo=${summary.kpis.doanhSo}`;
+    try {
+      const summary = await API.apiJson(`/api/dashboard/summary?${params.toString()}`);
+      if (seq !== dash.summarySeq) return; // a newer request already superseded this one
+      renderKPIs(summary.kpis);
+      renderFacets(summary.facets);
+      renderCharts(summary);
+      // TEMP DEBUG — remove once the filter issue is confirmed fixed.
+      if (debugEl) {
+        debugEl.textContent = `[debug] gửi: /api/dashboard/summary?${params.toString()} → server trả về ${summary.kpis.rowCount} dòng, doanhSo=${summary.kpis.doanhSo}`;
+      }
+    } catch (err) {
+      if (debugEl) {
+        debugEl.textContent = `[debug-error] /api/dashboard/summary?${params.toString()} → LỖI: ${err.message}`;
+      }
     }
   }
 
@@ -565,9 +571,16 @@
       page: dash.tablePage,
       pageSize: dash.tablePageSize,
     });
-    const result = await API.apiJson(`/api/dashboard/rows?${params.toString()}`);
-    if (seq !== dash.rowsSeq) return; // a newer request already superseded this one
-    renderTable(result);
+    try {
+      const result = await API.apiJson(`/api/dashboard/rows?${params.toString()}`);
+      if (seq !== dash.rowsSeq) return; // a newer request already superseded this one
+      renderTable(result);
+    } catch (err) {
+      const debugEl = el("dashboardFilterDebug");
+      if (debugEl) {
+        debugEl.textContent += ` | [debug-error rows] ${err.message}`;
+      }
+    }
   }
 
   // Status dropdown is rebuilt from the (unfiltered) summary response each
