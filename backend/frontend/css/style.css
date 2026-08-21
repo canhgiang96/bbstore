@@ -147,16 +147,6 @@ body {
 .drop-zone p { color: var(--text-muted); margin: 4px 0; }
 .hint { font-size: 12.5px; margin-top: 10px; }
 
-/* Mapping banner + grid (also reused inside the mapping-override modal) */
-.mapping-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; padding: 14px 20px; }
-.report-picker-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; padding: 14px 20px; }
-.report-picker-bar label { font-weight: 600; font-size: 13.5px; white-space: nowrap; }
-.report-picker-bar select { flex: 1; min-width: 0; }
-.mapping-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 20px; margin-top: 10px; }
-.mapping-field { display: flex; flex-direction: column; gap: 6px; }
-.mapping-field label { font-size: 13px; font-weight: 600; color: var(--text-muted); }
-.mapping-field .req::after { content: " *"; color: var(--danger); }
-
 /* Data manager (per-tab CRUD table) */
 .data-panel-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
 .data-panel-header h2 { margin: 0; font-size: 19px; }

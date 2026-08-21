@@ -119,3 +119,69 @@ def test_rows_sql_injection_attempt_on_sort_is_ignored(parquet_path):
     # or executing arbitrary SQL.
     result = run_rows_query(parquet_path, sort='"date"; DROP TABLE x; --', page_size=10)
     assert result["total"] == 6
+
+
+# ---- Multi-Report aggregation (Dashboard no longer pins to one Report — see
+# the "xem bằng bộ lọc" change: it queries every ready Report's Parquet
+# together and the date/category/status filters narrow the combined set) ----
+
+MARCH_HEADERS = HEADERS
+MARCH_ROWS = [
+    ["O7", "2026-03-01 08:00", "Hoàn thành", "", "G700-1", "SP G", "Áo", 90000, 2, 0],
+    ["O8", "2026-03-02 09:00", "Đang giao hàng", "", "H800-1", "SP H", "Quần", 60000, 1, 0],
+]
+
+
+@pytest.fixture
+def parquet_path_march():
+    wb = Workbook()
+    ws = wb.active
+    ws.append(MARCH_HEADERS)
+    for r in MARCH_ROWS:
+        ws.append(r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    parquet_bytes, row_count, mapping = excel_to_parquet(buf)
+    assert row_count == 2
+
+    fd, path = tempfile.mkstemp(suffix=".parquet")
+    with os.fdopen(fd, "wb") as f:
+        f.write(parquet_bytes)
+    yield path
+    os.remove(path)
+
+
+def test_summary_aggregates_across_multiple_reports(parquet_path, parquet_path_march):
+    result = run_summary_query([parquet_path, parquet_path_march])
+    # Feb total (940.000) + March total (90000*2 + 60000*1 = 240.000)
+    assert result["kpis"]["doanhSo"] == 940000 + 240000
+    assert result["kpis"]["rowCount"] == 6 + 2
+
+
+def test_summary_date_filter_narrows_across_reports(parquet_path, parquet_path_march):
+    # Only March rows should count when filtered to March.
+    result = run_summary_query([parquet_path, parquet_path_march], from_date="2026-03-01", to_date="2026-03-31")
+    assert result["kpis"]["doanhSo"] == 240000
+    assert result["kpis"]["rowCount"] == 2
+
+
+def test_rows_pagination_across_multiple_reports(parquet_path, parquet_path_march):
+    result = run_rows_query([parquet_path, parquet_path_march], page_size=100)
+    assert result["total"] == 8
+    ids_seen = {r["orderId"] for r in result["rows"]}
+    assert ids_seen == {"O1", "O2", "O3", "O4", "O5", "O6", "O7", "O8"}
+
+
+def test_summary_empty_source_list_returns_zeroed_result():
+    result = run_summary_query([])
+    assert result["kpis"]["doanhSo"] == 0
+    assert result["kpis"]["rowCount"] == 0
+    assert result["facets"]["categories"] == []
+
+
+def test_rows_empty_source_list_returns_empty_page():
+    result = run_rows_query([], page_size=15)
+    assert result["total"] == 0
+    assert result["rows"] == []

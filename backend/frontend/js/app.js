@@ -47,25 +47,6 @@
   const UNTAGGED_BATCH_LABEL = "(Thêm thủ công / không rõ nguồn)";
   function batchLabel(row) { return row.__sourceFile || UNTAGGED_BATCH_LABEL; }
 
-  // Field labels shown in the "Chỉnh cột" modal. Detection itself (which
-  // header maps to which field) now runs server-side at upload/remap time —
-  // see backend/app/mapping.py — this list only drives the modal's UI.
-  const FIELDS = [
-    { key: "date", label: "Ngày", required: true },
-    { key: "product", label: "Sản phẩm", required: false },
-    { key: "category", label: "Danh mục", required: false },
-    { key: "customer", label: "Khách hàng", required: false },
-    { key: "quantity", label: "Số lượng", required: false },
-    { key: "price", label: "Đơn giá", required: false },
-    { key: "revenue", label: "Doanh thu", required: false },
-    { key: "status", label: "Trạng thái đơn hàng", required: false },
-    { key: "orderId", label: "Mã đơn hàng", required: false },
-    { key: "skuVariant", label: "SKU phân loại hàng", required: false },
-    { key: "originalPrice", label: "Giá gốc", required: false },
-    { key: "cancelReason", label: "Lý do hủy", required: false },
-    { key: "returnedQty", label: "SL sản phẩm hoàn trả", required: false },
-  ];
-
   /* ================= Store metadata (Master/Combo/Dòng tiền/Điều chỉnh — Orders is now API-backed, not a generic store) ================= */
   const CASHFLOW_HEADERS = ["Mã giao dịch", "Đơn hàng / Sản phẩm", "Mã đơn hàng", "Mã Số Thuế", "Mã yêu cầu hoàn tiền", "Mã sản phẩm", "Tên sản phẩm", "Ngày đặt hàng", "Ngày hoàn thành thanh toán", "Phương thức thanh toán", "Phân Loại", "Sản Phẩm Bán Chạy", "Tổng tiền đã thanh toán", "Giá sản phẩm", "Số tiền hoàn lại", "Phí vận chuyển Người mua trả", "Phí vận chuyển thực tế", "Phí vận chuyển được trợ giá từ Shopee", "Phí vận chuyển trả hàng (đơn Trả hàng/hoàn tiền)", "Phí vận chuyển được hoàn bởi PiShip", "Phí vận chuyển trả hàng (đơn giao không thành công)", "Sản phẩm được trợ giá từ Shopee", "Mã ưu đãi do Người Bán chịu", "Mã ưu đãi Đồng Tài Trợ do Người Bán chịu", "Mã hoàn xu do Người Bán chịu", "Mã hoàn xu Đồng Tài Trợ do Người Bán chịu", "Phí cố định", "Phí Dịch Vụ", "Phí xử lý giao dịch", "Phí hoa hồng Tiếp thị liên kết", "Phí dịch vụ PiShip", "Phí dịch vụ hiển thị NTTD (từ doanh thu đơn hàng)", "Thuế GTGT", "Thuế TNCN", "Phí lắp đặt người mua trả", "Phí lắp đặt thực tế", "Trade-in Bonus by Seller", "Người Mua", "Amount Paid By Buyer", "Transaction Fee Rate (%)", "Phương thức thanh toán của Người mua", "Buyer Payment Method Details_1", "Installment Plan (if applicable)", "Phí vận chuyển - Người bán hỗ trợ", "Đơn vị vận chuyển", "Courier Name", "Mã voucher", "Đền bù đơn mất hàng", "Giá sản phẩm (sau khuyến mãi)", "Shopee xu", "Shopee voucher", "Ngân hàng khuyến mãi thanh toán trên Thẻ Tín Dụng", "Shopee khuyến mãi thanh toán trên Thẻ Tín Dụng"];
 
@@ -357,7 +338,6 @@
   }
 
   /* ================= Orders / Reports tab (API-backed) ================= */
-  let reportsCache = [];
   let pollTimers = {};
 
   function wireOrdersTab() {
@@ -410,10 +390,7 @@
           clearInterval(pollTimers[reportId]);
           delete pollTimers[reportId];
           await refreshReportsList();
-          if (report.status === "ready") {
-            dash.selectedReportId = reportId; // jump the Dashboard to the Report just processed
-            refreshDashboard();
-          }
+          if (report.status === "ready") refreshDashboard(); // the aggregate now includes it
         }
       } catch (e) { /* transient — keep polling */ }
     }, 2500);
@@ -434,7 +411,6 @@
       el("reportsListBody").innerHTML = `<p class="muted">Không tải được danh sách Report: ${escapeHtml(e.message)}</p>`;
       return;
     }
-    reportsCache = reports;
     el("reportsListCount").textContent = `${reports.length.toLocaleString("vi-VN")} Report`;
 
     const body = el("reportsListBody");
@@ -473,84 +449,50 @@
     reports.filter(r => r.status === "processing").forEach(r => pollReportStatus(r.id));
   }
 
-  /* ================= Dashboard (reads Report data via the API) ================= */
+  /* ================= Dashboard (aggregates every ready Report — see
+     /api/dashboard/summary + /rows; the date/category/status filters below
+     are how the user narrows the view, not a per-Report picker) ================= */
   const dash = {
-    reports: [],
-    selectedReportId: null,
-    reportMeta: null, // full GET /api/reports/{id} response for the selected Report
-    summary: null,
+    reportsCount: 0,
+    readyCount: 0,
     tableSearch: "",
     tablePage: 1,
     tablePageSize: 15,
     tableSort: "date",
     tableSortDir: "asc",
+    filtersWired: false,
     charts: {},
   };
 
   async function refreshDashboard() {
+    let reports;
     try {
-      dash.reports = await API.apiJson("/api/reports");
+      reports = await API.apiJson("/api/reports");
     } catch (e) {
-      dash.reports = [];
+      reports = [];
     }
+    dash.reportsCount = reports.length;
+    dash.readyCount = reports.filter(r => r.status === "ready").length;
 
-    if (!dash.reports.length) {
-      el("reportPickerWrap").hidden = true;
+    if (!dash.readyCount) {
       el("dashboardEmpty").hidden = false;
       el("dashboardContent").hidden = true;
-      el("dashboardEmptyHint").innerHTML = API.isAdmin()
-        ? `Vào tab <strong>Đơn hàng</strong> để tải lên file Excel.`
-        : `Chưa có Admin nào tải lên Report.`;
+      if (!reports.length) {
+        el("dashboardEmptyHint").innerHTML = API.isAdmin()
+          ? `Vào tab <strong>Đơn hàng</strong> để tải lên file Excel.`
+          : `Chưa có Admin nào tải lên Report.`;
+      } else {
+        el("dashboardEmptyHint").textContent = "Report đang được xử lý, vui lòng chờ trong giây lát...";
+      }
       return;
     }
 
-    if (!dash.selectedReportId || !dash.reports.some(r => r.id === dash.selectedReportId)) {
-      const readyReports = dash.reports.filter(r => r.status === "ready");
-      dash.selectedReportId = (readyReports[0] || dash.reports[0]).id;
-    }
-
-    renderReportPicker();
-    await loadSelectedReport();
-  }
-
-  function renderReportPicker() {
-    const wrap = el("reportPickerWrap");
-    wrap.hidden = false;
-    const sel = el("reportPicker");
-    sel.innerHTML = dash.reports.map(r => {
-      const when = new Date(r.uploaded_at).toLocaleDateString("vi-VN");
-      const statusNote = r.status !== "ready" ? ` — ${r.status === "processing" ? "đang xử lý" : "lỗi"}` : "";
-      return `<option value="${escapeHtml(r.id)}">${escapeHtml(r.name)} — ${when}${statusNote}</option>`;
-    }).join("");
-    sel.value = dash.selectedReportId;
-  }
-
-  async function loadSelectedReport() {
-    const summary = dash.reports.find(r => r.id === dash.selectedReportId);
-    if (!summary) return;
-
-    if (summary.status !== "ready") {
-      el("dashboardEmpty").hidden = false;
-      el("dashboardContent").hidden = true;
-      el("dashboardEmptyHint").textContent = summary.status === "processing"
-        ? "Report đang được xử lý, vui lòng chờ trong giây lát..."
-        : `Report xử lý lỗi: ${summary.error_message || "không rõ nguyên nhân"}`;
-      return;
-    }
-
-    dash.reportMeta = await API.apiJson(`/api/reports/${dash.selectedReportId}`);
     el("dashboardEmpty").hidden = true;
     el("dashboardContent").hidden = false;
+    el("dashboardSourceNote").textContent = `Tổng hợp ${dash.readyCount.toLocaleString("vi-VN")} Report đã sẵn sàng`;
 
-    renderMappingBanner();
-    initDashboardFilters();
+    if (!dash.filtersWired) { initDashboardFilters(); dash.filtersWired = true; }
     await Promise.all([fetchAndRenderSummary(), fetchAndRenderRows()]);
-  }
-
-  function renderMappingBanner() {
-    const mapping = dash.reportMeta.mapping || {};
-    const parts = FIELDS.filter(f => mapping[f.key]).map(f => `${f.label} = ${mapping[f.key]}`);
-    el("mappingBannerText").textContent = "Đã nhận diện cột: " + (parts.length ? parts.join(" · ") : "chưa nhận diện được cột nào");
   }
 
   function currentFilterParams(extra) {
@@ -596,8 +538,7 @@
 
   async function fetchAndRenderSummary() {
     const params = currentFilterParams();
-    const summary = await API.apiJson(`/api/reports/${dash.selectedReportId}/summary?${params.toString()}`);
-    dash.summary = summary;
+    const summary = await API.apiJson(`/api/dashboard/summary?${params.toString()}`);
     renderKPIs(summary.kpis);
     renderFacets(summary.facets);
     renderCharts(summary);
@@ -611,7 +552,7 @@
       page: dash.tablePage,
       pageSize: dash.tablePageSize,
     });
-    const result = await API.apiJson(`/api/reports/${dash.selectedReportId}/rows?${params.toString()}`);
+    const result = await API.apiJson(`/api/dashboard/rows?${params.toString()}`);
     renderTable(result);
   }
 
@@ -733,71 +674,6 @@
     el("pageInfo").textContent = `Trang ${result.page} / ${maxPage} (${result.total.toLocaleString("vi-VN")} dòng)`;
   }
 
-  /* ---- "Chỉnh cột" mapping override — PATCHes the server, which reconverts
-     the Report's Parquet from the original file (see backend/app/routers/
-     reports.py) since the Parquet's columns are fixed at conversion time. ---- */
-  function wireMappingModal() {
-    el("btnEditMapping").onclick = async () => {
-      let headers = [];
-      try {
-        const res = await API.apiJson(`/api/reports/${dash.selectedReportId}/headers`);
-        headers = res.headers;
-      } catch (e) {
-        alert("Không tải được danh sách cột: " + e.message);
-        return;
-      }
-
-      const mapping = dash.reportMeta.mapping || {};
-      const grid = el("mappingModalGrid");
-      grid.innerHTML = "";
-      FIELDS.forEach(f => {
-        const wrap = document.createElement("div");
-        wrap.className = "mapping-field";
-        const label = document.createElement("label");
-        label.textContent = f.label;
-        if (f.required) label.classList.add("req");
-        const select = document.createElement("select");
-        select.id = "mmap_" + f.key;
-        const noneOpt = document.createElement("option");
-        noneOpt.value = ""; noneOpt.textContent = "-- Không có --";
-        select.appendChild(noneOpt);
-        headers.forEach(h => {
-          const opt = document.createElement("option");
-          opt.value = h; opt.textContent = h;
-          if (mapping[f.key] === h) opt.selected = true;
-          select.appendChild(opt);
-        });
-        wrap.appendChild(label);
-        wrap.appendChild(select);
-        grid.appendChild(wrap);
-      });
-      el("mappingModalOverlay").hidden = false;
-    };
-
-    el("mappingModalClose").onclick = () => { el("mappingModalOverlay").hidden = true; };
-    el("mappingModalSave").onclick = async () => {
-      const override = {};
-      FIELDS.forEach(f => { const v = el("mmap_" + f.key).value; if (v) override[f.key] = v; });
-      const btn = el("mappingModalSave");
-      btn.disabled = true;
-      btn.textContent = "Đang xử lý lại...";
-      try {
-        await API.apiJson(`/api/reports/${dash.selectedReportId}/mapping`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mapping: override }),
-        });
-        el("mappingModalOverlay").hidden = true;
-        await loadSelectedReport();
-      } catch (e) {
-        alert("Lỗi khi lưu mapping: " + e.message);
-      } finally {
-        btn.disabled = false;
-        btn.textContent = "Lưu";
-      }
-    };
-  }
-
   /* ================= Auth / login ================= */
   function showApp() {
     el("loginScreen").hidden = true;
@@ -819,7 +695,6 @@
     initTabs();
     Object.keys(STORE_META).forEach(setupDataManager);
     wireRowModal();
-    wireMappingModal();
     wireOrdersTab();
     showApp();
     refreshDashboard();

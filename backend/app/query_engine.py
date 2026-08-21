@@ -1,7 +1,11 @@
-"""DuckDB queries over one Report's data.parquet — backs GET /reports/{id}/summary
-and GET /reports/{id}/rows. Mirrors the aggregation logic in js/app.js's
-renderKPIs/sumDoanhSoWhere, renderTimelineChart/topN, and renderTable, but
-computed server-side so the browser never needs the full row set.
+"""DuckDB queries over Report data.parquet files — backs the Dashboard's
+summary/rows endpoints. `parquet_source` accepts either a single local path
+(one Report) or a list of paths (aggregated across every ready Report,
+since the Dashboard no longer pins to one Report — filtering by date/
+category/status is how the user narrows the view instead). Mirrors the
+aggregation logic in the old client-side js/app.js's renderKPIs/
+sumDoanhSoWhere, renderTimelineChart/topN, and renderTable, computed
+server-side so the browser never needs the full row set.
 """
 from __future__ import annotations
 
@@ -25,6 +29,15 @@ ALLOWED_SORT_COLUMNS = {
 
 GMV_STATUSES_SQL = "('Hoàn thành', 'Đang giao')"
 HOAN_STATUSES_SQL = "('Hoàn hàng', 'Hoàn 1 phần')"
+
+EMPTY_SUMMARY = {
+    "kpis": {"doanhSo": 0, "gmv": 0, "huyChuaXK": 0, "huySauXK": 0, "hoan": 0, "rowCount": 0},
+    "timeline": [],
+    "topProducts": [],
+    "categoryBreakdown": [],
+    "topCustomers": [],
+    "facets": {"categories": [], "statuses": []},
+}
 
 
 def _connect():
@@ -55,6 +68,10 @@ def invalidate_local_parquet_cache(report_id: str) -> None:
         os.remove(local_path)
 
 
+def _is_empty_source(parquet_source) -> bool:
+    return isinstance(parquet_source, (list, tuple)) and len(parquet_source) == 0
+
+
 def _where_clause(from_date=None, to_date=None, category=None, status=None):
     clauses = []
     params: list = []
@@ -73,7 +90,10 @@ def _where_clause(from_date=None, to_date=None, category=None, status=None):
     return (" AND ".join(clauses) if clauses else "1=1"), params
 
 
-def run_summary_query(parquet_path, from_date=None, to_date=None, category=None, status=None) -> dict:
+def run_summary_query(parquet_source, from_date=None, to_date=None, category=None, status=None) -> dict:
+    if _is_empty_source(parquet_source):
+        return EMPTY_SUMMARY
+
     con = _connect()
     try:
         where_sql, params = _where_clause(from_date, to_date, category, status)
@@ -89,7 +109,7 @@ def run_summary_query(parquet_path, from_date=None, to_date=None, category=None,
             FROM read_parquet(?) WHERE {where_sql}
         """
         total, gmv, huy_chua_xk, huy_sau_xk, hoan, row_count = con.execute(
-            totals_sql, [parquet_path, *params]
+            totals_sql, [parquet_source, *params]
         ).fetchone()
 
         timeline_sql = f"""
@@ -97,7 +117,7 @@ def run_summary_query(parquet_path, from_date=None, to_date=None, category=None,
             FROM read_parquet(?) WHERE {where_sql}
             GROUP BY month ORDER BY month
         """
-        timeline = con.execute(timeline_sql, [parquet_path, *params]).fetchall()
+        timeline = con.execute(timeline_sql, [parquet_source, *params]).fetchall()
 
         def top_n(column: str, n: int = 8):
             sql = f"""
@@ -105,22 +125,21 @@ def run_summary_query(parquet_path, from_date=None, to_date=None, category=None,
                 FROM read_parquet(?) WHERE {where_sql}
                 GROUP BY label ORDER BY value DESC LIMIT {n}
             """
-            return con.execute(sql, [parquet_path, *params]).fetchall()
+            return con.execute(sql, [parquet_source, *params]).fetchall()
 
         top_products = top_n("product")
         category_breakdown = top_n("category")
         top_customers = top_n("customer")
 
-        # Facets are computed over the whole Report (no filters applied) so the
-        # dropdown options don't shrink as the user filters — matches
-        # initDashboardFilters() populating from dash.records, not dash.filtered.
+        # Facets are computed over every row (no filters applied) so the
+        # dropdown options don't shrink as the user filters.
         facets_sql = """
             SELECT
               list(DISTINCT "category") AS categories,
               list(DISTINCT "trangThai") AS statuses
             FROM read_parquet(?)
         """
-        categories, statuses = con.execute(facets_sql, [parquet_path]).fetchone()
+        categories, statuses = con.execute(facets_sql, [parquet_source]).fetchone()
 
         return {
             "kpis": {
@@ -145,10 +164,14 @@ def run_summary_query(parquet_path, from_date=None, to_date=None, category=None,
 
 
 def run_rows_query(
-    parquet_path,
+    parquet_source,
     from_date=None, to_date=None, category=None, status=None,
     search=None, sort="date", sort_dir="asc", page=1, page_size=15,
 ) -> dict:
+    page = max(1, page)
+    if _is_empty_source(parquet_source):
+        return {"rows": [], "total": 0, "page": page, "pageSize": page_size}
+
     con = _connect()
     try:
         where_sql, params = _where_clause(from_date, to_date, category, status)
@@ -163,14 +186,13 @@ def run_rows_query(
             params.extend([like] * 6)
 
         total = con.execute(
-            f'SELECT COUNT(*) FROM read_parquet(?) WHERE {where_sql}', [parquet_path, *params]
+            f'SELECT COUNT(*) FROM read_parquet(?) WHERE {where_sql}', [parquet_source, *params]
         ).fetchone()[0]
 
         # Column/direction are whitelisted, not parameterized — DuckDB can't
         # bind identifiers, so this is the injection guard.
         sort_col = sort if sort in ALLOWED_SORT_COLUMNS else "date"
         sort_dir_sql = "DESC" if str(sort_dir).lower() == "desc" else "ASC"
-        page = max(1, page)
         offset = (page - 1) * page_size
 
         cols_sql = ", ".join(f'"{c}"' for c in DETAIL_COLUMNS)
@@ -183,7 +205,7 @@ def run_rows_query(
         # .fetchall() (not .fetchdf()) so values come back as plain Python
         # types (int/float/str/datetime) — a pandas DataFrame would give us
         # numpy/pandas types that FastAPI's JSON encoder can choke on.
-        cursor = con.execute(rows_sql, [parquet_path, *params, page_size, offset])
+        cursor = con.execute(rows_sql, [parquet_source, *params, page_size, offset])
         col_names = [d[0] for d in cursor.description]
         rows = [dict(zip(col_names, r)) for r in cursor.fetchall()]
 

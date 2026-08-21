@@ -12,6 +12,7 @@ app = FastAPI(title="BBStore Dashboard API")
 app.include_router(auth.router)
 app.include_router(reports.router)
 app.include_router(dashboard.router)
+app.include_router(dashboard.dashboard_router)
 
 
 @app.get("/api/health")
