@@ -532,6 +532,11 @@
 
   function applyFiltersAndRender() {
     dash.tablePage = 1;
+    // TEMP DEBUG — shows the raw input values read at the moment of click.
+    const debugClickEl = el("dashboardFilterDebugClick");
+    if (debugClickEl) {
+      debugClickEl.textContent = `[debug-click] Bấm Tìm kiếm lúc ${new Date().toLocaleTimeString("vi-VN")} — filterFrom.value="${el("filterFrom").value}", filterTo.value="${el("filterTo").value}", filterStatus.value="${el("filterStatus").value}"`;
+    }
     fetchAndRenderSummary();
     fetchAndRenderRows();
   }
