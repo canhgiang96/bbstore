@@ -8,16 +8,26 @@ import boto3
 from .config import get_settings
 
 
+_s3_client = None
+
+
 def _client():
-    s = get_settings()
-    endpoint = f"https://{s.r2_account_id}.r2.cloudflarestorage.com"
-    return boto3.client(
-        "s3",
-        endpoint_url=endpoint,
-        aws_access_key_id=s.r2_access_key_id,
-        aws_secret_access_key=s.r2_secret_access_key,
-        region_name="auto",
-    )
+    # Cached singleton: boto3 low-level clients are thread-safe for making
+    # calls, so this is safe to share across the threadpool these storage
+    # functions run in (see run_in_threadpool call sites) without paying
+    # per-call credential/endpoint resolution overhead.
+    global _s3_client
+    if _s3_client is None:
+        s = get_settings()
+        endpoint = f"https://{s.r2_account_id}.r2.cloudflarestorage.com"
+        _s3_client = boto3.client(
+            "s3",
+            endpoint_url=endpoint,
+            aws_access_key_id=s.r2_access_key_id,
+            aws_secret_access_key=s.r2_secret_access_key,
+            region_name="auto",
+        )
+    return _s3_client
 
 
 def original_key(report_id: str, filename: str) -> str:

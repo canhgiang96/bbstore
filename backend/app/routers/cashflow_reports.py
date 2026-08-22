@@ -39,11 +39,9 @@ async def _process_cashflow_report(report_id: str, xlsx_bytes) -> None:
             },
         )
     except CashflowMappingError as e:
-        await db.pg_update("cashflow_reports", {"id": f"eq.{report_id}"}, {"status": "failed", "error_message": str(e)})
+        await db.mark_failed("cashflow_reports", report_id, str(e))
     except Exception as e:  # noqa: BLE001 — a bad file should fail the Report, not crash the worker
-        await db.pg_update(
-            "cashflow_reports", {"id": f"eq.{report_id}"}, {"status": "failed", "error_message": f"Lỗi xử lý: {e}"}
-        )
+        await db.mark_failed("cashflow_reports", report_id, f"Lỗi xử lý: {e}")
 
 
 @router.post("", response_model=ReportCreatedOut, status_code=202)

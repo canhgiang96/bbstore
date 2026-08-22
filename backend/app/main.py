@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from . import db
 from .routers import (
     adjustments_reports,
     auth,
@@ -16,7 +18,14 @@ from .routers import (
     sales_channels,
 )
 
-app = FastAPI(title="BBStore Dashboard API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    await db.aclose_client()
+
+
+app = FastAPI(title="BBStore Dashboard API", lifespan=lifespan)
 
 app.include_router(auth.router)
 app.include_router(reports.router)
