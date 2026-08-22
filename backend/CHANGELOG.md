@@ -137,4 +137,24 @@ hơn:**
 
 Mỗi lần sửa `frontend/js/app.js` hoặc `frontend/index.html`, nhớ tăng số
 `?v=N` ở 2 dòng `<script src="js/...">` cuối `index.html` — nếu không trình
-duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=26**.
+duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=27**.
+
+## 9. Tối ưu hóa code (reuse/simplification/efficiency)
+
+- **Backend**: dùng chung 1 `httpx.AsyncClient`/boto3 client thay vì tạo
+  mới mỗi lần gọi Supabase/R2; `db.mark_failed()` chống Report kẹt mãi ở
+  "processing" nếu bước ghi lỗi cũng lỗi; gộp code trùng ở
+  `query_engine.py` (4 hàm `run_*_query`), 5 router upload (Đơn hàng/Dòng
+  tiền/Combo/Master File/Điều chỉnh — qua `routers/_report_crud.py`), và
+  logic nhận diện cột Excel (`mapping.score_headers`/`first_match_mapping`,
+  dùng lại ở `master_to_parquet.py`/`adjustments_to_parquet.py`/
+  `cashflow_to_parquet.py`/`combo_to_parquet.py`); gộp 2 lượt tải Parquet
+  từ R2 khi `/summary` và `/rows` chạy song song lúc cache nguội
+  (`get_local_parquet_async`); bỏ cột "sku" dư thừa không ai đọc lại trong
+  Parquet Đơn hàng.
+- **Frontend**: gộp 5 controller tab upload/poll/list/delete gần như giống
+  hệt nhau (Đơn hàng/Dòng tiền/Combo/Master File/Điều chỉnh) thành 1
+  `createReportTab()` dùng chung trong `app.js`.
+- File chính: `app/db.py`, `app/storage.py`, `app/query_engine.py`,
+  `app/routers/_report_crud.py` (mới), `app/mapping.py`,
+  `frontend/js/app.js` (`createReportTab`).

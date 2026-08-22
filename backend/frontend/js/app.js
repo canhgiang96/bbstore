@@ -89,63 +89,154 @@
     });
   }
 
-  /* ================= Orders / Reports tab (API-backed) ================= */
-  let pollTimers = {};
+  /* ================= Report tabs (API-backed) =================
+     Đơn hàng/Dòng tiền/Combo/Master File/Điều chỉnh doanh thu all follow the
+     same "dropzone upload -> process in background -> poll -> render list
+     -> [channel PATCH] -> delete" pattern. createReportTab() below is the
+     one implementation all 5 build on; each just supplies its endpoint,
+     DOM ids, and the handful of things that actually differ between them
+     (see the per-tab config blocks further down):
+       - hasChannel: only Đơn hàng/Dòng tiền/Điều chỉnh doanh thu carry a
+         "Kênh bán hàng" column — Combo/Master File don't.
+       - afterChange: fired after a report finishes processing (poll sees
+         status leave "processing") and after a delete — Đơn hàng/Dòng
+         tiền/Combo/Master File all feed the Orders Dashboard, so this is
+         refreshDashboard; Điều chỉnh doanh thu is a standalone
+         record-keeping viewer (not joined into the Dashboard), so it's
+         null there.
+       - afterChannelChange: fired after a channel <select> is saved. Only
+         Đơn hàng's channel is actually read by the Dashboard's query
+         engine (see query_engine._channel_tagged_source_sql) — Dòng
+         tiền/Điều chỉnh doanh thu's channel is pure organizational
+         tagging on their own list, so only Đơn hàng passes
+         refreshDashboard here.
+     Điều chỉnh doanh thu also has its own read-only expandable row viewer,
+     wired on via extraColumns/rowSuffix/afterListRendered/onBeforeDelete —
+     see its section below. */
+  function createReportTab({
+    endpoint, dropzoneId, inputId, summaryId, listBodyId, listCountId,
+    hasChannel = false, afterChange = null, afterChannelChange = null,
+    extraColumns = [], rowSuffix = null, afterListRendered = null, onBeforeDelete = null,
+  }) {
+    const pollTimers = {};
 
-  function wireOrdersTab() {
-    const dz = el("uploadDropzone");
-    const input = el("uploadInput");
-    if (!API.isAdmin()) {
-      dz.hidden = true;
-    } else {
-      ["dragenter", "dragover"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add("dragover"); }));
-      ["dragleave", "drop"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove("dragover"); }));
-      dz.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) handleReportUpload(f); });
-      input.addEventListener("change", e => {
-        const f = e.target.files[0];
-        if (f) handleReportUpload(f);
-        input.value = "";
-      });
+    function pollStatus(reportId) {
+      if (pollTimers[reportId]) clearInterval(pollTimers[reportId]);
+      pollTimers[reportId] = setInterval(async () => {
+        try {
+          const report = await API.apiJson(`${endpoint}/${reportId}`);
+          if (report.status !== "processing") {
+            clearInterval(pollTimers[reportId]);
+            delete pollTimers[reportId];
+            await refresh();
+            if (report.status === "ready" && afterChange) afterChange(); // the aggregate now includes it
+          }
+        } catch (e) { /* transient — keep polling */ }
+      }, 2500);
     }
-    refreshReportsList();
-  }
 
-  async function handleReportUpload(file) {
-    const box = el("uploadSummary");
-    box.className = "import-summary";
-    box.textContent = `Đang tải lên "${file.name}"...`;
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const res = await API.apiFetch("/api/reports", { method: "POST", body: formData });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || `Lỗi ${res.status}`);
-      }
-      const created = await res.json();
-      box.className = "import-summary ok";
-      box.textContent = `Đã tải lên — đang xử lý...`;
-      await refreshReportsList();
-      pollReportStatus(created.id);
-    } catch (err) {
-      box.className = "import-summary err";
-      box.textContent = "Lỗi tải lên: " + err.message;
-    }
-  }
-
-  function pollReportStatus(reportId) {
-    if (pollTimers[reportId]) clearInterval(pollTimers[reportId]);
-    pollTimers[reportId] = setInterval(async () => {
+    async function refresh() {
+      const isAdmin = API.isAdmin();
+      let reports;
       try {
-        const report = await API.apiJson(`/api/reports/${reportId}`);
-        if (report.status !== "processing") {
-          clearInterval(pollTimers[reportId]);
-          delete pollTimers[reportId];
-          await refreshReportsList();
-          if (report.status === "ready") refreshDashboard(); // the aggregate now includes it
+        reports = await API.apiJson(endpoint);
+      } catch (e) {
+        el(listBodyId).innerHTML = `<p class="muted">Không tải được danh sách Report: ${escapeHtml(e.message)}</p>`;
+        return;
+      }
+      el(listCountId).textContent = `${reports.length.toLocaleString("vi-VN")} Report`;
+
+      const body = el(listBodyId);
+      if (!reports.length) {
+        body.innerHTML = `<p class="muted" style="padding:16px;">Chưa có Report nào.</p>`;
+        return;
+      }
+
+      const channelCol = hasChannel ? [{
+        label: "Kênh bán hàng",
+        cell: (r, isAdmin) => isAdmin ? channelSelectHtml(r.id, r.sales_channel_id) : escapeHtml(channelName(r.sales_channel_id)),
+      }] : [];
+      const cols = channelCol.concat(extraColumns);
+      const colspan = 4 + cols.length + (isAdmin ? 1 : 0);
+
+      body.innerHTML = `<div class="table-scroll"><table><thead><tr>
+          <th>Report</th><th>Trạng thái</th><th>Số dòng</th><th>Tải lên lúc</th>${cols.map(c => `<th>${escapeHtml(c.label)}</th>`).join("")}${isAdmin ? "<th>Thao tác</th>" : ""}
+        </tr></thead><tbody>` + reports.map(r => {
+          const rowHtml = `<tr>
+            <td>${escapeHtml(r.name)}</td>
+            <td>${STATUS_BADGE[r.status] || escapeHtml(r.status)}${r.status === "failed" && r.error_message ? `<div class="muted" style="margin-top:4px;">${escapeHtml(r.error_message)}</div>` : ""}</td>
+            <td>${r.row_count != null ? r.row_count.toLocaleString("vi-VN") : "–"}</td>
+            <td>${new Date(r.uploaded_at).toLocaleString("vi-VN")}</td>
+            ${cols.map(c => `<td>${c.cell(r, isAdmin)}</td>`).join("")}
+            ${isAdmin ? `<td><button class="btn btn-danger btn-sm" data-del="${escapeHtml(r.id)}">Xóa</button></td>` : ""}
+          </tr>`;
+          return rowHtml + (rowSuffix ? rowSuffix(r, isAdmin, colspan) : "");
+        }).join("") + `</tbody></table></div>`;
+
+      if (isAdmin) {
+        body.querySelectorAll("button[data-del]").forEach(btn => {
+          btn.onclick = async () => {
+            const id = btn.dataset.del;
+            const report = reports.find(r => r.id === id);
+            if (!confirm(`Xóa toàn bộ Report "${report ? report.name : id}"? Hành động này không thể hoàn tác.`)) return;
+            await API.apiJson(`${endpoint}/${id}`, { method: "DELETE" });
+            if (onBeforeDelete) onBeforeDelete(id);
+            await refresh();
+            if (afterChange) afterChange();
+          };
+        });
+        if (hasChannel) wireChannelSelects(body, endpoint, async () => { await refresh(); if (afterChannelChange) afterChannelChange(); });
+      }
+
+      if (afterListRendered) afterListRendered(body);
+
+      // Any still-processing report needs a poller (e.g. after a page
+      // reload mid-conversion) — pollStatus() is a no-op re-arm if already polling.
+      reports.filter(r => r.status === "processing").forEach(r => pollStatus(r.id));
+    }
+
+    async function handleUpload(file) {
+      const box = el(summaryId);
+      box.className = "import-summary";
+      box.textContent = `Đang tải lên "${file.name}"...`;
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        const res = await API.apiFetch(endpoint, { method: "POST", body: formData });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.detail || `Lỗi ${res.status}`);
         }
-      } catch (e) { /* transient — keep polling */ }
-    }, 2500);
+        const created = await res.json();
+        box.className = "import-summary ok";
+        box.textContent = `Đã tải lên — đang xử lý...`;
+        await refresh();
+        pollStatus(created.id);
+      } catch (err) {
+        box.className = "import-summary err";
+        box.textContent = "Lỗi tải lên: " + err.message;
+      }
+    }
+
+    function wire() {
+      const dz = el(dropzoneId);
+      const input = el(inputId);
+      if (!API.isAdmin()) {
+        dz.hidden = true;
+      } else {
+        ["dragenter", "dragover"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add("dragover"); }));
+        ["dragleave", "drop"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove("dragover"); }));
+        dz.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) handleUpload(f); });
+        input.addEventListener("change", e => {
+          const f = e.target.files[0];
+          if (f) handleUpload(f);
+          input.value = "";
+        });
+      }
+      refresh();
+    }
+
+    return { wire, refresh };
   }
 
   const STATUS_BADGE = {
@@ -154,10 +245,11 @@
     failed: '<span class="pill bad">Lỗi</span>',
   };
 
-  // "Kênh bán hàng" assignment — shared by the Đơn hàng and Dòng tiền
-  // Report lists (see wireChannelSelects' call sites). dash.salesChannels
-  // is fetched once at startup (see refreshSalesChannelsCache) and kept in
-  // sync by the Kênh bán hàng tab's own add/delete actions.
+  // "Kênh bán hàng" assignment — shared by the Đơn hàng, Dòng tiền và Điều
+  // chỉnh doanh thu Report lists (see wireChannelSelects' call sites).
+  // dash.salesChannels is fetched once at startup (see
+  // refreshSalesChannelsCache) and kept in sync by the Kênh bán hàng tab's
+  // own add/delete actions.
   function channelName(channelId) {
     const c = dash.salesChannels.find(c => c.id === channelId);
     return c ? c.name : "(Chưa gán)";
@@ -190,387 +282,57 @@
     });
   }
 
-  async function refreshReportsList() {
-    const isAdmin = API.isAdmin();
-    let reports;
-    try {
-      reports = await API.apiJson("/api/reports");
-    } catch (e) {
-      el("reportsListBody").innerHTML = `<p class="muted">Không tải được danh sách Report: ${escapeHtml(e.message)}</p>`;
-      return;
-    }
-    el("reportsListCount").textContent = `${reports.length.toLocaleString("vi-VN")} Report`;
+  /* ---- Đơn hàng (Orders) — the only tab whose channel feeds the Dashboard's
+     query engine, so it's the only one wiring afterChannelChange. ---- */
+  const ordersTab = createReportTab({
+    endpoint: "/api/reports",
+    dropzoneId: "uploadDropzone", inputId: "uploadInput", summaryId: "uploadSummary",
+    listBodyId: "reportsListBody", listCountId: "reportsListCount",
+    hasChannel: true,
+    afterChange: () => refreshDashboard(),
+    afterChannelChange: () => refreshDashboard(),
+  });
 
-    const body = el("reportsListBody");
-    if (!reports.length) {
-      body.innerHTML = `<p class="muted" style="padding:16px;">Chưa có Report nào.</p>`;
-      return;
-    }
+  /* ---- Dòng tiền (Cashflow) — supplies Phí AFF for the Dashboard's
+     query-time join, so uploading/deleting one also refreshes it. ---- */
+  const cashflowTab = createReportTab({
+    endpoint: "/api/cashflow-reports",
+    dropzoneId: "cashflowUploadDropzone", inputId: "cashflowUploadInput", summaryId: "cashflowUploadSummary",
+    listBodyId: "cashflowReportsListBody", listCountId: "cashflowReportsListCount",
+    hasChannel: true,
+    afterChange: () => refreshDashboard(),
+  });
 
-    body.innerHTML = `<div class="table-scroll"><table><thead><tr>
-        <th>Report</th><th>Trạng thái</th><th>Số dòng</th><th>Tải lên lúc</th><th>Kênh bán hàng</th>${isAdmin ? "<th>Thao tác</th>" : ""}
-      </tr></thead><tbody>` + reports.map(r => `
-        <tr>
-          <td>${escapeHtml(r.name)}</td>
-          <td>${STATUS_BADGE[r.status] || escapeHtml(r.status)}${r.status === "failed" && r.error_message ? `<div class="muted" style="margin-top:4px;">${escapeHtml(r.error_message)}</div>` : ""}</td>
-          <td>${r.row_count != null ? r.row_count.toLocaleString("vi-VN") : "–"}</td>
-          <td>${new Date(r.uploaded_at).toLocaleString("vi-VN")}</td>
-          <td>${isAdmin ? channelSelectHtml(r.id, r.sales_channel_id) : escapeHtml(channelName(r.sales_channel_id))}</td>
-          ${isAdmin ? `<td><button class="btn btn-danger btn-sm" data-del="${escapeHtml(r.id)}">Xóa</button></td>` : ""}
-        </tr>
-      `).join("") + `</tbody></table></div>`;
+  /* ---- Combo — explodes matching Orders skuVariant into sub-SKU
+     components at query time, so uploading/deleting one also refreshes
+     the Dashboard. No Kênh bán hàng column. ---- */
+  const comboTab = createReportTab({
+    endpoint: "/api/combo-reports",
+    dropzoneId: "comboUploadDropzone", inputId: "comboUploadInput", summaryId: "comboUploadSummary",
+    listBodyId: "comboReportsListBody", listCountId: "comboReportsListCount",
+    afterChange: () => refreshDashboard(),
+  });
 
-    if (isAdmin) {
-      body.querySelectorAll("button[data-del]").forEach(btn => {
-        btn.onclick = async () => {
-          const id = btn.dataset.del;
-          const report = reports.find(r => r.id === id);
-          if (!confirm(`Xóa toàn bộ Report "${report ? report.name : id}"? Hành động này không thể hoàn tác.`)) return;
-          await API.apiJson(`/api/reports/${id}`, { method: "DELETE" });
-          await refreshReportsList();
-          refreshDashboard();
-        };
-      });
-      wireChannelSelects(body, "/api/reports", async () => { await refreshReportsList(); refreshDashboard(); });
-    }
+  /* ---- Master File — supplies Phân loại kho/mục/sản phẩm and Giá vốn for
+     the Dashboard's query-time join, so uploading/deleting one also
+     refreshes it. No Kênh bán hàng column. ---- */
+  const masterTab = createReportTab({
+    endpoint: "/api/master-reports",
+    dropzoneId: "masterUploadDropzone", inputId: "masterUploadInput", summaryId: "masterUploadSummary",
+    listBodyId: "masterReportsListBody", listCountId: "masterReportsListCount",
+    afterChange: () => refreshDashboard(),
+  });
 
-    // Any still-processing report needs a poller (e.g. after a page reload
-    // mid-conversion) — pollReportStatus() is a no-op re-arm if already polling.
-    reports.filter(r => r.status === "processing").forEach(r => pollReportStatus(r.id));
-  }
-
-  /* ================= Dòng tiền / Cashflow Reports tab (API-backed) — mirrors
-     the Orders tab above 1:1, pointed at /api/cashflow-reports. Cashflow
-     Reports exist solely to supply Phí AFF for the Orders Dashboard's
-     query-time join, so uploading/deleting one also refreshes the Dashboard. ================= */
-  let cashflowPollTimers = {};
-
-  function wireCashflowTab() {
-    const dz = el("cashflowUploadDropzone");
-    const input = el("cashflowUploadInput");
-    if (!API.isAdmin()) {
-      dz.hidden = true;
-    } else {
-      ["dragenter", "dragover"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add("dragover"); }));
-      ["dragleave", "drop"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove("dragover"); }));
-      dz.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) handleCashflowUpload(f); });
-      input.addEventListener("change", e => {
-        const f = e.target.files[0];
-        if (f) handleCashflowUpload(f);
-        input.value = "";
-      });
-    }
-    refreshCashflowReportsList();
-  }
-
-  async function handleCashflowUpload(file) {
-    const box = el("cashflowUploadSummary");
-    box.className = "import-summary";
-    box.textContent = `Đang tải lên "${file.name}"...`;
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const res = await API.apiFetch("/api/cashflow-reports", { method: "POST", body: formData });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || `Lỗi ${res.status}`);
-      }
-      const created = await res.json();
-      box.className = "import-summary ok";
-      box.textContent = `Đã tải lên — đang xử lý...`;
-      await refreshCashflowReportsList();
-      pollCashflowStatus(created.id);
-    } catch (err) {
-      box.className = "import-summary err";
-      box.textContent = "Lỗi tải lên: " + err.message;
-    }
-  }
-
-  function pollCashflowStatus(reportId) {
-    if (cashflowPollTimers[reportId]) clearInterval(cashflowPollTimers[reportId]);
-    cashflowPollTimers[reportId] = setInterval(async () => {
-      try {
-        const report = await API.apiJson(`/api/cashflow-reports/${reportId}`);
-        if (report.status !== "processing") {
-          clearInterval(cashflowPollTimers[reportId]);
-          delete cashflowPollTimers[reportId];
-          await refreshCashflowReportsList();
-          if (report.status === "ready") refreshDashboard(); // Phí AFF now includes it
-        }
-      } catch (e) { /* transient — keep polling */ }
-    }, 2500);
-  }
-
-  async function refreshCashflowReportsList() {
-    const isAdmin = API.isAdmin();
-    let reports;
-    try {
-      reports = await API.apiJson("/api/cashflow-reports");
-    } catch (e) {
-      el("cashflowReportsListBody").innerHTML = `<p class="muted">Không tải được danh sách Report: ${escapeHtml(e.message)}</p>`;
-      return;
-    }
-    el("cashflowReportsListCount").textContent = `${reports.length.toLocaleString("vi-VN")} Report`;
-
-    const body = el("cashflowReportsListBody");
-    if (!reports.length) {
-      body.innerHTML = `<p class="muted" style="padding:16px;">Chưa có Report nào.</p>`;
-      return;
-    }
-
-    body.innerHTML = `<div class="table-scroll"><table><thead><tr>
-        <th>Report</th><th>Trạng thái</th><th>Số dòng</th><th>Tải lên lúc</th><th>Kênh bán hàng</th>${isAdmin ? "<th>Thao tác</th>" : ""}
-      </tr></thead><tbody>` + reports.map(r => `
-        <tr>
-          <td>${escapeHtml(r.name)}</td>
-          <td>${STATUS_BADGE[r.status] || escapeHtml(r.status)}${r.status === "failed" && r.error_message ? `<div class="muted" style="margin-top:4px;">${escapeHtml(r.error_message)}</div>` : ""}</td>
-          <td>${r.row_count != null ? r.row_count.toLocaleString("vi-VN") : "–"}</td>
-          <td>${new Date(r.uploaded_at).toLocaleString("vi-VN")}</td>
-          <td>${isAdmin ? channelSelectHtml(r.id, r.sales_channel_id) : escapeHtml(channelName(r.sales_channel_id))}</td>
-          ${isAdmin ? `<td><button class="btn btn-danger btn-sm" data-del="${escapeHtml(r.id)}">Xóa</button></td>` : ""}
-        </tr>
-      `).join("") + `</tbody></table></div>`;
-
-    if (isAdmin) {
-      body.querySelectorAll("button[data-del]").forEach(btn => {
-        btn.onclick = async () => {
-          const id = btn.dataset.del;
-          const report = reports.find(r => r.id === id);
-          if (!confirm(`Xóa toàn bộ Report "${report ? report.name : id}"? Hành động này không thể hoàn tác.`)) return;
-          await API.apiJson(`/api/cashflow-reports/${id}`, { method: "DELETE" });
-          await refreshCashflowReportsList();
-          refreshDashboard();
-        };
-      });
-      wireChannelSelects(body, "/api/cashflow-reports", refreshCashflowReportsList);
-    }
-
-    reports.filter(r => r.status === "processing").forEach(r => pollCashflowStatus(r.id));
-  }
-
-  /* ================= Combo Reports tab (API-backed) — mirrors the Cashflow
-     tab above 1:1, pointed at /api/combo-reports. Combo Reports exist solely
-     to explode matching Orders skuVariant into their sub-SKU components at
-     query time, so uploading/deleting one also refreshes the Dashboard. ================= */
-  let comboPollTimers = {};
-
-  function wireComboTab() {
-    const dz = el("comboUploadDropzone");
-    const input = el("comboUploadInput");
-    if (!API.isAdmin()) {
-      dz.hidden = true;
-    } else {
-      ["dragenter", "dragover"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add("dragover"); }));
-      ["dragleave", "drop"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove("dragover"); }));
-      dz.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) handleComboUpload(f); });
-      input.addEventListener("change", e => {
-        const f = e.target.files[0];
-        if (f) handleComboUpload(f);
-        input.value = "";
-      });
-    }
-    refreshComboReportsList();
-  }
-
-  async function handleComboUpload(file) {
-    const box = el("comboUploadSummary");
-    box.className = "import-summary";
-    box.textContent = `Đang tải lên "${file.name}"...`;
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const res = await API.apiFetch("/api/combo-reports", { method: "POST", body: formData });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || `Lỗi ${res.status}`);
-      }
-      const created = await res.json();
-      box.className = "import-summary ok";
-      box.textContent = `Đã tải lên — đang xử lý...`;
-      await refreshComboReportsList();
-      pollComboStatus(created.id);
-    } catch (err) {
-      box.className = "import-summary err";
-      box.textContent = "Lỗi tải lên: " + err.message;
-    }
-  }
-
-  function pollComboStatus(reportId) {
-    if (comboPollTimers[reportId]) clearInterval(comboPollTimers[reportId]);
-    comboPollTimers[reportId] = setInterval(async () => {
-      try {
-        const report = await API.apiJson(`/api/combo-reports/${reportId}`);
-        if (report.status !== "processing") {
-          clearInterval(comboPollTimers[reportId]);
-          delete comboPollTimers[reportId];
-          await refreshComboReportsList();
-          if (report.status === "ready") refreshDashboard(); // combo explosion now includes it
-        }
-      } catch (e) { /* transient — keep polling */ }
-    }, 2500);
-  }
-
-  async function refreshComboReportsList() {
-    const isAdmin = API.isAdmin();
-    let reports;
-    try {
-      reports = await API.apiJson("/api/combo-reports");
-    } catch (e) {
-      el("comboReportsListBody").innerHTML = `<p class="muted">Không tải được danh sách Report: ${escapeHtml(e.message)}</p>`;
-      return;
-    }
-    el("comboReportsListCount").textContent = `${reports.length.toLocaleString("vi-VN")} Report`;
-
-    const body = el("comboReportsListBody");
-    if (!reports.length) {
-      body.innerHTML = `<p class="muted" style="padding:16px;">Chưa có Report nào.</p>`;
-      return;
-    }
-
-    body.innerHTML = `<div class="table-scroll"><table><thead><tr>
-        <th>Report</th><th>Trạng thái</th><th>Số dòng</th><th>Tải lên lúc</th>${isAdmin ? "<th>Thao tác</th>" : ""}
-      </tr></thead><tbody>` + reports.map(r => `
-        <tr>
-          <td>${escapeHtml(r.name)}</td>
-          <td>${STATUS_BADGE[r.status] || escapeHtml(r.status)}${r.status === "failed" && r.error_message ? `<div class="muted" style="margin-top:4px;">${escapeHtml(r.error_message)}</div>` : ""}</td>
-          <td>${r.row_count != null ? r.row_count.toLocaleString("vi-VN") : "–"}</td>
-          <td>${new Date(r.uploaded_at).toLocaleString("vi-VN")}</td>
-          ${isAdmin ? `<td><button class="btn btn-danger btn-sm" data-del="${escapeHtml(r.id)}">Xóa</button></td>` : ""}
-        </tr>
-      `).join("") + `</tbody></table></div>`;
-
-    if (isAdmin) {
-      body.querySelectorAll("button[data-del]").forEach(btn => {
-        btn.onclick = async () => {
-          const id = btn.dataset.del;
-          const report = reports.find(r => r.id === id);
-          if (!confirm(`Xóa toàn bộ Report "${report ? report.name : id}"? Hành động này không thể hoàn tác.`)) return;
-          await API.apiJson(`/api/combo-reports/${id}`, { method: "DELETE" });
-          await refreshComboReportsList();
-          refreshDashboard();
-        };
-      });
-    }
-
-    reports.filter(r => r.status === "processing").forEach(r => pollComboStatus(r.id));
-  }
-
-  /* ================= Master File Reports tab (API-backed) — mirrors the
-     Combo tab above 1:1, pointed at /api/master-reports. Master File Reports
-     exist solely to supply Phân loại kho/mục/sản phẩm and Giá vốn for the
-     Orders Dashboard's query-time join, so uploading/deleting one also
-     refreshes the Dashboard. ================= */
-  let masterPollTimers = {};
-
-  function wireMasterTab() {
-    const dz = el("masterUploadDropzone");
-    const input = el("masterUploadInput");
-    if (!API.isAdmin()) {
-      dz.hidden = true;
-    } else {
-      ["dragenter", "dragover"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add("dragover"); }));
-      ["dragleave", "drop"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove("dragover"); }));
-      dz.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) handleMasterUpload(f); });
-      input.addEventListener("change", e => {
-        const f = e.target.files[0];
-        if (f) handleMasterUpload(f);
-        input.value = "";
-      });
-    }
-    refreshMasterReportsList();
-  }
-
-  async function handleMasterUpload(file) {
-    const box = el("masterUploadSummary");
-    box.className = "import-summary";
-    box.textContent = `Đang tải lên "${file.name}"...`;
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const res = await API.apiFetch("/api/master-reports", { method: "POST", body: formData });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || `Lỗi ${res.status}`);
-      }
-      const created = await res.json();
-      box.className = "import-summary ok";
-      box.textContent = `Đã tải lên — đang xử lý...`;
-      await refreshMasterReportsList();
-      pollMasterStatus(created.id);
-    } catch (err) {
-      box.className = "import-summary err";
-      box.textContent = "Lỗi tải lên: " + err.message;
-    }
-  }
-
-  function pollMasterStatus(reportId) {
-    if (masterPollTimers[reportId]) clearInterval(masterPollTimers[reportId]);
-    masterPollTimers[reportId] = setInterval(async () => {
-      try {
-        const report = await API.apiJson(`/api/master-reports/${reportId}`);
-        if (report.status !== "processing") {
-          clearInterval(masterPollTimers[reportId]);
-          delete masterPollTimers[reportId];
-          await refreshMasterReportsList();
-          if (report.status === "ready") refreshDashboard(); // Giá vốn/category lookups now include it
-        }
-      } catch (e) { /* transient — keep polling */ }
-    }, 2500);
-  }
-
-  async function refreshMasterReportsList() {
-    const isAdmin = API.isAdmin();
-    let reports;
-    try {
-      reports = await API.apiJson("/api/master-reports");
-    } catch (e) {
-      el("masterReportsListBody").innerHTML = `<p class="muted">Không tải được danh sách Report: ${escapeHtml(e.message)}</p>`;
-      return;
-    }
-    el("masterReportsListCount").textContent = `${reports.length.toLocaleString("vi-VN")} Report`;
-
-    const body = el("masterReportsListBody");
-    if (!reports.length) {
-      body.innerHTML = `<p class="muted" style="padding:16px;">Chưa có Report nào.</p>`;
-      return;
-    }
-
-    body.innerHTML = `<div class="table-scroll"><table><thead><tr>
-        <th>Report</th><th>Trạng thái</th><th>Số dòng</th><th>Tải lên lúc</th>${isAdmin ? "<th>Thao tác</th>" : ""}
-      </tr></thead><tbody>` + reports.map(r => `
-        <tr>
-          <td>${escapeHtml(r.name)}</td>
-          <td>${STATUS_BADGE[r.status] || escapeHtml(r.status)}${r.status === "failed" && r.error_message ? `<div class="muted" style="margin-top:4px;">${escapeHtml(r.error_message)}</div>` : ""}</td>
-          <td>${r.row_count != null ? r.row_count.toLocaleString("vi-VN") : "–"}</td>
-          <td>${new Date(r.uploaded_at).toLocaleString("vi-VN")}</td>
-          ${isAdmin ? `<td><button class="btn btn-danger btn-sm" data-del="${escapeHtml(r.id)}">Xóa</button></td>` : ""}
-        </tr>
-      `).join("") + `</tbody></table></div>`;
-
-    if (isAdmin) {
-      body.querySelectorAll("button[data-del]").forEach(btn => {
-        btn.onclick = async () => {
-          const id = btn.dataset.del;
-          const report = reports.find(r => r.id === id);
-          if (!confirm(`Xóa toàn bộ Report "${report ? report.name : id}"? Hành động này không thể hoàn tác.`)) return;
-          await API.apiJson(`/api/master-reports/${id}`, { method: "DELETE" });
-          await refreshMasterReportsList();
-          refreshDashboard();
-        };
-      });
-    }
-
-    reports.filter(r => r.status === "processing").forEach(r => pollMasterStatus(r.id));
-  }
-
-  /* ================= Điều chỉnh doanh thu Reports tab (API-backed) — mirrors
-     the Master File tab above, pointed at /api/adjustments-reports. Unlike
-     Combo/Cashflow/Master File, this data isn't joined into the Orders
-     Dashboard's query engine (it's a standalone record-keeping viewer, same
-     role the old IndexedDB manager played), so instead of "uploading also
-     refreshes the Dashboard" it gets its own read-only rows viewer — click
-     "Xem dữ liệu" on a ready Report to expand its first 50 rows inline. ================= */
-  let adjustmentsPollTimers = {};
+  /* ================= Điều chỉnh doanh thu (revenue adjustments) =================
+     Unlike Combo/Cashflow/Master File, this data isn't joined into the
+     Orders Dashboard's query engine (it's a standalone record-keeping
+     viewer, same role the old IndexedDB manager played) — so instead of
+     "uploading also refreshes the Dashboard" it gets its own read-only
+     rows viewer: click "Xem dữ liệu" on a ready Report to expand its first
+     50 rows inline. That expand/collapse feature is unique to this tab, so
+     it's wired on top of createReportTab via extraColumns/rowSuffix/
+     afterListRendered/onBeforeDelete rather than being part of the shared
+     factory. ================= */
   let adjustmentsExpandedReportId = null;
   let adjustmentsExpandedRows = null; // {rows, total, page, pageSize} for the currently expanded report, or null while loading
 
@@ -584,81 +346,26 @@
     { key: "paymentCompletedDate", label: "Ngày hoàn thành thanh toán" },
   ];
 
-  function wireAdjustmentsTab() {
-    const dz = el("adjustmentsUploadDropzone");
-    const input = el("adjustmentsUploadInput");
-    if (!API.isAdmin()) {
-      dz.hidden = true;
-    } else {
-      ["dragenter", "dragover"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add("dragover"); }));
-      ["dragleave", "drop"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove("dragover"); }));
-      dz.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) handleAdjustmentsUpload(f); });
-      input.addEventListener("change", e => {
-        const f = e.target.files[0];
-        if (f) handleAdjustmentsUpload(f);
-        input.value = "";
-      });
-    }
-    refreshAdjustmentsReportsList();
-  }
-
-  async function handleAdjustmentsUpload(file) {
-    const box = el("adjustmentsUploadSummary");
-    box.className = "import-summary";
-    box.textContent = `Đang tải lên "${file.name}"...`;
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const res = await API.apiFetch("/api/adjustments-reports", { method: "POST", body: formData });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || `Lỗi ${res.status}`);
-      }
-      const created = await res.json();
-      box.className = "import-summary ok";
-      box.textContent = `Đã tải lên — đang xử lý...`;
-      await refreshAdjustmentsReportsList();
-      pollAdjustmentsStatus(created.id);
-    } catch (err) {
-      box.className = "import-summary err";
-      box.textContent = "Lỗi tải lên: " + err.message;
-    }
-  }
-
-  function pollAdjustmentsStatus(reportId) {
-    if (adjustmentsPollTimers[reportId]) clearInterval(adjustmentsPollTimers[reportId]);
-    adjustmentsPollTimers[reportId] = setInterval(async () => {
-      try {
-        const report = await API.apiJson(`/api/adjustments-reports/${reportId}`);
-        if (report.status !== "processing") {
-          clearInterval(adjustmentsPollTimers[reportId]);
-          delete adjustmentsPollTimers[reportId];
-          await refreshAdjustmentsReportsList();
-        }
-      } catch (e) { /* transient — keep polling */ }
-    }, 2500);
-  }
-
   async function toggleAdjustmentsExpand(reportId) {
     if (adjustmentsExpandedReportId === reportId) {
       adjustmentsExpandedReportId = null;
       adjustmentsExpandedRows = null;
-      await refreshAdjustmentsReportsList();
+      await adjustmentsTab.refresh();
       return;
     }
     adjustmentsExpandedReportId = reportId;
     adjustmentsExpandedRows = null;
-    await refreshAdjustmentsReportsList();
+    await adjustmentsTab.refresh();
     try {
       const result = await API.apiJson(`/api/adjustments-reports/${reportId}/rows?page=1&pageSize=50`);
       if (adjustmentsExpandedReportId !== reportId) return; // collapsed while the request was in flight
       adjustmentsExpandedRows = result;
-      await refreshAdjustmentsReportsList();
+      await adjustmentsTab.refresh();
     } catch (err) {
       adjustmentsExpandedReportId = null;
       adjustmentsExpandedRows = null;
       alert("Lỗi tải dữ liệu: " + err.message);
-      await refreshAdjustmentsReportsList();
+      await adjustmentsTab.refresh();
     }
   }
 
@@ -685,61 +392,27 @@
       </td></tr>`;
   }
 
-  async function refreshAdjustmentsReportsList() {
-    const isAdmin = API.isAdmin();
-    let reports;
-    try {
-      reports = await API.apiJson("/api/adjustments-reports");
-    } catch (e) {
-      el("adjustmentsReportsListBody").innerHTML = `<p class="muted">Không tải được danh sách Report: ${escapeHtml(e.message)}</p>`;
-      return;
-    }
-    el("adjustmentsReportsListCount").textContent = `${reports.length.toLocaleString("vi-VN")} Report`;
-
-    const body = el("adjustmentsReportsListBody");
-    if (!reports.length) {
-      body.innerHTML = `<p class="muted" style="padding:16px;">Chưa có Report nào.</p>`;
-      return;
-    }
-
-    const colspan = 6 + (isAdmin ? 1 : 0);
-    body.innerHTML = `<div class="table-scroll"><table><thead><tr>
-        <th>Report</th><th>Trạng thái</th><th>Số dòng</th><th>Tải lên lúc</th><th>Kênh bán hàng</th><th>Dữ liệu</th>${isAdmin ? "<th>Thao tác</th>" : ""}
-      </tr></thead><tbody>` + reports.map(r => {
-        const isExpanded = adjustmentsExpandedReportId === r.id;
-        const rowHtml = `
-        <tr>
-          <td>${escapeHtml(r.name)}</td>
-          <td>${STATUS_BADGE[r.status] || escapeHtml(r.status)}${r.status === "failed" && r.error_message ? `<div class="muted" style="margin-top:4px;">${escapeHtml(r.error_message)}</div>` : ""}</td>
-          <td>${r.row_count != null ? r.row_count.toLocaleString("vi-VN") : "–"}</td>
-          <td>${new Date(r.uploaded_at).toLocaleString("vi-VN")}</td>
-          <td>${isAdmin ? channelSelectHtml(r.id, r.sales_channel_id) : escapeHtml(channelName(r.sales_channel_id))}</td>
-          <td>${r.status === "ready" ? `<button class="btn btn-ghost btn-sm adjustments-view-btn" data-report-id="${escapeHtml(r.id)}">${isExpanded ? "Ẩn" : "Xem"} dữ liệu</button>` : ""}</td>
-          ${isAdmin ? `<td><button class="btn btn-danger btn-sm" data-del="${escapeHtml(r.id)}">Xóa</button></td>` : ""}
-        </tr>`;
-        return rowHtml + (isExpanded ? renderAdjustmentsExpandedRowHtml(colspan) : "");
-      }).join("") + `</tbody></table></div>`;
-
-    if (isAdmin) {
-      body.querySelectorAll("button[data-del]").forEach(btn => {
-        btn.onclick = async () => {
-          const id = btn.dataset.del;
-          const report = reports.find(r => r.id === id);
-          if (!confirm(`Xóa toàn bộ Report "${report ? report.name : id}"? Hành động này không thể hoàn tác.`)) return;
-          await API.apiJson(`/api/adjustments-reports/${id}`, { method: "DELETE" });
-          if (adjustmentsExpandedReportId === id) { adjustmentsExpandedReportId = null; adjustmentsExpandedRows = null; }
-          await refreshAdjustmentsReportsList();
-        };
+  const adjustmentsTab = createReportTab({
+    endpoint: "/api/adjustments-reports",
+    dropzoneId: "adjustmentsUploadDropzone", inputId: "adjustmentsUploadInput", summaryId: "adjustmentsUploadSummary",
+    listBodyId: "adjustmentsReportsListBody", listCountId: "adjustmentsReportsListCount",
+    hasChannel: true,
+    extraColumns: [{
+      label: "Dữ liệu",
+      cell: r => r.status === "ready"
+        ? `<button class="btn btn-ghost btn-sm adjustments-view-btn" data-report-id="${escapeHtml(r.id)}">${adjustmentsExpandedReportId === r.id ? "Ẩn" : "Xem"} dữ liệu</button>`
+        : "",
+    }],
+    rowSuffix: (r, isAdmin, colspan) => adjustmentsExpandedReportId === r.id ? renderAdjustmentsExpandedRowHtml(colspan) : "",
+    afterListRendered: body => {
+      body.querySelectorAll(".adjustments-view-btn").forEach(btn => {
+        btn.onclick = () => toggleAdjustmentsExpand(btn.dataset.reportId);
       });
-      wireChannelSelects(body, "/api/adjustments-reports", refreshAdjustmentsReportsList);
-    }
-
-    body.querySelectorAll(".adjustments-view-btn").forEach(btn => {
-      btn.onclick = () => toggleAdjustmentsExpand(btn.dataset.reportId);
-    });
-
-    reports.filter(r => r.status === "processing").forEach(r => pollAdjustmentsStatus(r.id));
-  }
+    },
+    onBeforeDelete: id => {
+      if (adjustmentsExpandedReportId === id) { adjustmentsExpandedReportId = null; adjustmentsExpandedRows = null; }
+    },
+  });
 
   /* ================= Sales Channels (Kênh bán hàng) — a plain named list,
      not a file-upload Report, so this tab is much simpler than the ones
@@ -1601,11 +1274,11 @@
   async function initApp() {
     initTabs();
     await refreshSalesChannelsCache(); // Đơn hàng/Dòng tiền/Điều chỉnh lists render a channel <select> per row from this
-    wireOrdersTab();
-    wireCashflowTab();
-    wireComboTab();
-    wireMasterTab();
-    wireAdjustmentsTab();
+    ordersTab.wire();
+    cashflowTab.wire();
+    comboTab.wire();
+    masterTab.wire();
+    adjustmentsTab.wire();
     wireSalesChannelsTab();
     showApp();
     refreshDashboard();
