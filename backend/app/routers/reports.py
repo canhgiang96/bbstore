@@ -20,7 +20,7 @@ from ..deps import require_admin
 from ..excel_to_parquet import MappingError, excel_to_parquet, get_original_headers
 from ..models import MappingUpdateRequest
 from ..query_engine import invalidate_local_parquet_cache
-from ._report_crud import create_report_crud_router
+from ._report_crud import convert_with_backpressure, create_report_crud_router
 
 router = create_report_crud_router(
     prefix="/api/reports",
@@ -62,7 +62,7 @@ async def update_mapping(report_id: str, body: MappingUpdateRequest, user: dict 
     with tempfile.NamedTemporaryFile(suffix=".xlsx") as tmp:
         await run_in_threadpool(storage.download_to_path, row["original_xlsx_key"], tmp.name)
         try:
-            parquet_bytes, row_count, mapping = await run_in_threadpool(
+            parquet_bytes, row_count, mapping = await convert_with_backpressure(
                 excel_to_parquet, tmp.name, mapping_override=body.mapping
             )
         except MappingError as e:

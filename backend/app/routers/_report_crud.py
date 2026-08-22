@@ -12,6 +12,7 @@ NOT itself an included router — main.py includes each concrete module's
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import uuid
 from typing import Callable
@@ -22,6 +23,33 @@ from starlette.concurrency import run_in_threadpool
 from .. import db, storage
 from ..deps import get_current_user, require_admin
 from ..models import ChannelUpdateRequest, ReportCreatedOut, ReportDetailOut, ReportOut
+
+# Excel-to-parquet conversion (openpyxl + pandas) is the single most
+# memory-hungry step in the whole upload pipeline, and the app runs on a
+# single memory-constrained instance (no worker pool) — several large
+# files converting at once (e.g. a few upload requests landing seconds
+# apart) can stack their peak memory and tip the process into an OOM
+# kill. This semaphore is shared across ALL 5 Report types (Orders,
+# Cashflow, Combo, Master File, Điều chỉnh doanh thu) so at most one
+# conversion runs at a time process-wide — later ones simply wait their
+# turn instead of piling on memory pressure together.
+#
+# Created lazily (on first use, inside a coroutine) rather than at import
+# time: asyncio.Semaphore() built before any event loop is running isn't
+# safe on every Python version (older asyncio eagerly bound it to
+# whatever loop happened to exist at construction, which can be a
+# different loop than the one that later runs the app). No await happens
+# between the None-check and the assignment, so this can't race even
+# though the module could be imported from multiple contexts.
+_conversion_semaphore: asyncio.Semaphore | None = None
+
+
+async def convert_with_backpressure(converter: Callable, *args, **kwargs):
+    global _conversion_semaphore
+    if _conversion_semaphore is None:
+        _conversion_semaphore = asyncio.Semaphore(1)
+    async with _conversion_semaphore:
+        return await run_in_threadpool(converter, *args, **kwargs)
 
 
 def create_report_crud_router(
@@ -42,8 +70,10 @@ def create_report_crud_router(
         try:
             # Both are blocking/CPU-bound (openpyxl parsing a potentially
             # huge sheet; boto3's R2 upload) — off the event loop so one big
-            # upload doesn't freeze every other concurrent request.
-            parquet_bytes, row_count, mapping = await run_in_threadpool(converter, io.BytesIO(xlsx_bytes))
+            # upload doesn't freeze every other concurrent request. The
+            # conversion itself is additionally rate-limited process-wide —
+            # see _CONVERSION_SEMAPHORE above.
+            parquet_bytes, row_count, mapping = await convert_with_backpressure(converter, io.BytesIO(xlsx_bytes))
             await run_in_threadpool(
                 storage.upload_bytes, parquet_key_fn(report_id), parquet_bytes, "application/octet-stream"
             )
@@ -58,9 +88,12 @@ def create_report_crud_router(
                 },
             )
         except mapping_error as e:
-            await db.mark_failed(table, report_id, str(e))
+            await db.mark_failed(table, report_id, str(e) or repr(e))
         except Exception as e:  # noqa: BLE001 — a bad file should fail the Report, not crash the worker
-            await db.mark_failed(table, report_id, f"Lỗi xử lý: {e}")
+            # str(e) can be "" for some exceptions raised with no message
+            # (e.g. a bare StopIteration) — repr(e) still names the type in
+            # that case, so the Report never shows a blank error.
+            await db.mark_failed(table, report_id, f"Lỗi xử lý: {str(e) or repr(e)}")
 
     @router.post("", response_model=ReportCreatedOut, status_code=202)
     async def create_report(
