@@ -13,7 +13,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .excel_to_parquet import read_excel_rows
-from .mapping import normalize_header
+from .mapping import first_match_mapping
 from .parsing import to_number
 
 COMBO_KEYWORDS = {
@@ -38,17 +38,7 @@ class ComboMappingError(ValueError):
 
 
 def detect_combo_mapping(headers: list[str]) -> dict[str, str]:
-    normalized = [(h, normalize_header(h)) for h in headers]
-    result: dict[str, str] = {}
-    for field, keywords in COMBO_KEYWORDS.items():
-        for h, n in normalized:
-            for w in keywords:
-                if n == w or w in n:
-                    result[field] = h
-                    break
-            if field in result:
-                break
-    return result
+    return first_match_mapping(headers, COMBO_KEYWORDS)
 
 
 def combo_excel_to_parquet(file_like, sheet_name=0) -> tuple[bytes, int, dict]:

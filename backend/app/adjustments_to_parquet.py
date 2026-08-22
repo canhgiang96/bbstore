@@ -17,7 +17,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .excel_to_parquet import read_excel_rows
-from .mapping import normalize_header
+from .mapping import score_headers
 from .parsing import to_number
 
 ADJUSTMENT_KEYWORDS = {
@@ -36,25 +36,7 @@ class AdjustmentMappingError(ValueError):
 
 
 def detect_adjustment_mapping(headers: list[str]) -> dict[str, str]:
-    normalized = [(h, normalize_header(h)) for h in headers]
-    result: dict[str, str] = {}
-    for field, keywords in ADJUSTMENT_KEYWORDS.items():
-        best_header = None
-        best_score = float("-inf")
-        for h, n in normalized:
-            for w in keywords:
-                if n == w:
-                    score = 100 + len(w)
-                elif w in n:
-                    score = len(w)
-                else:
-                    continue
-                if score > best_score:
-                    best_score = score
-                    best_header = h
-        if best_header is not None and best_score > 0:
-            result[field] = best_header
-    return result
+    return score_headers(headers, ADJUSTMENT_KEYWORDS)
 
 
 def adjustment_excel_to_parquet(file_like, sheet_name=0) -> tuple[bytes, int, dict]:

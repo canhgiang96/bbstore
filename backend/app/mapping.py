@@ -80,24 +80,40 @@ IDENTIFIER_PREFIX = re.compile(r"^(sku|ma|id)\b")
 NAME_LIKE_FIELDS = {"product", "category", "customer"}
 
 
-def detect_mapping(headers: list[str]) -> dict[str, str]:
+def score_headers(headers: list[str], keywords: dict[str, list[str]], score_adjust=None) -> dict[str, str]:
+    """Exact-match-priority header scoring: for each field, picks the
+    header whose normalized text scores highest against that field's
+    keyword list (an exact normalized match beats a substring match;
+    longer keyword wins ties within the same match type).
+
+    Shared by detect_mapping below and by the Master File / Điều chỉnh
+    doanh thu importers (app.master_to_parquet, app.adjustments_to_parquet)
+    — all three need this real scoring, not just "first match wins", to
+    disambiguate a header that's a substring of another (e.g. "SKU" inside
+    "SKU phân loại"). Combo/Cashflow don't have that collision and use the
+    simpler first_match_mapping instead.
+
+    score_adjust, if given, is called as score_adjust(field, header,
+    normalized_header, score) -> adjusted_score for a field-specific
+    penalty/bonus (detect_mapping uses this to penalize identifier-looking
+    headers for name-like fields).
+    """
     normalized = [(h, normalize_header(h)) for h in headers]
     result: dict[str, str] = {}
 
-    for field, keywords in KEYWORDS.items():
+    for field, words in keywords.items():
         best_header = None
         best_score = float("-inf")
         for h, n in normalized:
-            is_identifier = bool(IDENTIFIER_PREFIX.match(n))
-            for w in keywords:
+            for w in words:
                 if n == w:
                     score = 100 + len(w)
                 elif w in n:
                     score = len(w)
                 else:
                     continue
-                if is_identifier and field in NAME_LIKE_FIELDS:
-                    score -= 50
+                if score_adjust is not None:
+                    score = score_adjust(field, h, n, score)
                 if score > best_score:
                     best_score = score
                     best_header = h
@@ -105,3 +121,32 @@ def detect_mapping(headers: list[str]) -> dict[str, str]:
             result[field] = best_header
 
     return result
+
+
+def first_match_mapping(headers: list[str], keywords: dict[str, list[str]]) -> dict[str, str]:
+    """Simpler "first header, in file order, that exact-matches or contains
+    a field's keyword wins" detector — used by Cashflow and Combo, whose
+    headers don't have Master File-style substring collisions (see
+    score_headers's docstring for when that's not safe).
+    """
+    normalized = [(h, normalize_header(h)) for h in headers]
+    result: dict[str, str] = {}
+    for field, words in keywords.items():
+        for h, n in normalized:
+            for w in words:
+                if n == w or w in n:
+                    result[field] = h
+                    break
+            if field in result:
+                break
+    return result
+
+
+def _detect_mapping_score_adjust(field, header, normalized_header, score):
+    if field in NAME_LIKE_FIELDS and IDENTIFIER_PREFIX.match(normalized_header):
+        return score - 50
+    return score
+
+
+def detect_mapping(headers: list[str]) -> dict[str, str]:
+    return score_headers(headers, KEYWORDS, score_adjust=_detect_mapping_score_adjust)

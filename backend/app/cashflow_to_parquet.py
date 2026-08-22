@@ -15,7 +15,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .excel_to_parquet import read_excel_rows
-from .mapping import normalize_header
+from .mapping import first_match_mapping
 from .parsing import to_number
 
 CASHFLOW_KEYWORDS = {
@@ -29,17 +29,7 @@ class CashflowMappingError(ValueError):
 
 
 def detect_cashflow_mapping(headers: list[str]) -> dict[str, str]:
-    normalized = [(h, normalize_header(h)) for h in headers]
-    result: dict[str, str] = {}
-    for field, keywords in CASHFLOW_KEYWORDS.items():
-        for h, n in normalized:
-            for w in keywords:
-                if n == w or w in n:
-                    result[field] = h
-                    break
-            if field in result:
-                break
-    return result
+    return first_match_mapping(headers, CASHFLOW_KEYWORDS)
 
 
 def cashflow_excel_to_parquet(file_like, sheet_name=0) -> tuple[bytes, int, dict]:
