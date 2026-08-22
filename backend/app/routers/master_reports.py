@@ -10,6 +10,7 @@ import io
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from .. import db, storage
 from ..deps import get_current_user, require_admin
@@ -23,8 +24,10 @@ MASTER_REPORT_LIST_FIELDS = "id,name,uploaded_at,uploaded_by,row_count,status,er
 
 async def _process_master_report(report_id: str, xlsx_bytes) -> None:
     try:
-        parquet_bytes, row_count, mapping = master_excel_to_parquet(io.BytesIO(xlsx_bytes))
-        storage.upload_bytes(storage.master_parquet_key(report_id), parquet_bytes, "application/octet-stream")
+        parquet_bytes, row_count, mapping = await run_in_threadpool(master_excel_to_parquet, io.BytesIO(xlsx_bytes))
+        await run_in_threadpool(
+            storage.upload_bytes, storage.master_parquet_key(report_id), parquet_bytes, "application/octet-stream"
+        )
         await db.pg_update(
             "master_reports",
             {"id": f"eq.{report_id}"},
@@ -55,7 +58,8 @@ async def create_master_report(
     report_id = str(uuid.uuid4())
     xlsx_bytes = await file.read()
 
-    storage.upload_bytes(
+    await run_in_threadpool(
+        storage.upload_bytes,
         storage.master_original_key(report_id, file.filename),
         xlsx_bytes,
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

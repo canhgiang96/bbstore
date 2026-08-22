@@ -11,6 +11,7 @@ import tempfile
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from .. import db, storage
 from ..deps import get_current_user, require_admin
@@ -25,8 +26,13 @@ REPORT_LIST_FIELDS = "id,name,uploaded_at,uploaded_by,row_count,status,error_mes
 
 async def _process_report(report_id: str, xlsx_bytes: bytes) -> None:
     try:
-        parquet_bytes, row_count, mapping = excel_to_parquet(io.BytesIO(xlsx_bytes))
-        storage.upload_bytes(storage.parquet_key(report_id), parquet_bytes, "application/octet-stream")
+        # Both are blocking/CPU-bound (openpyxl parsing a potentially huge
+        # sheet; boto3's R2 upload) — off the event loop so one big upload
+        # doesn't freeze every other concurrent request while it runs.
+        parquet_bytes, row_count, mapping = await run_in_threadpool(excel_to_parquet, io.BytesIO(xlsx_bytes))
+        await run_in_threadpool(
+            storage.upload_bytes, storage.parquet_key(report_id), parquet_bytes, "application/octet-stream"
+        )
         await db.pg_update(
             "reports",
             {"id": f"eq.{report_id}"},
@@ -57,7 +63,10 @@ async def create_report(
     report_id = str(uuid.uuid4())
     xlsx_bytes = await file.read()
 
-    storage.upload_bytes(
+    # Off the event loop — boto3 is sync, and this upload would otherwise
+    # block every other concurrent request until it finishes.
+    await run_in_threadpool(
+        storage.upload_bytes,
         storage.original_key(report_id, file.filename),
         xlsx_bytes,
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -104,8 +113,8 @@ async def get_headers(report_id: str, user: dict = Depends(require_admin)):
     if not row:
         raise HTTPException(status_code=404, detail="Không tìm thấy Report.")
     with tempfile.NamedTemporaryFile(suffix=".xlsx") as tmp:
-        storage.download_to_path(row["original_xlsx_key"], tmp.name)
-        headers = get_original_headers(tmp.name)
+        await run_in_threadpool(storage.download_to_path, row["original_xlsx_key"], tmp.name)
+        headers = await run_in_threadpool(get_original_headers, tmp.name)
     return {"headers": headers}
 
 
@@ -120,13 +129,15 @@ async def update_mapping(report_id: str, body: MappingUpdateRequest, user: dict 
         raise HTTPException(status_code=404, detail="Không tìm thấy Report.")
 
     with tempfile.NamedTemporaryFile(suffix=".xlsx") as tmp:
-        storage.download_to_path(row["original_xlsx_key"], tmp.name)
+        await run_in_threadpool(storage.download_to_path, row["original_xlsx_key"], tmp.name)
         try:
-            parquet_bytes, row_count, mapping = excel_to_parquet(tmp.name, mapping_override=body.mapping)
+            parquet_bytes, row_count, mapping = await run_in_threadpool(
+                excel_to_parquet, tmp.name, mapping_override=body.mapping
+            )
         except MappingError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-    storage.upload_bytes(storage.parquet_key(report_id), parquet_bytes, "application/octet-stream")
+    await run_in_threadpool(storage.upload_bytes, storage.parquet_key(report_id), parquet_bytes, "application/octet-stream")
     invalidate_local_parquet_cache(report_id)
     await db.pg_update(
         "reports", {"id": f"eq.{report_id}"}, {"mapping": mapping, "row_count": row_count}

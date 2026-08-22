@@ -14,12 +14,13 @@ import uuid
 
 import duckdb
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from .. import db, storage
 from ..adjustments_to_parquet import AdjustmentMappingError, adjustment_excel_to_parquet
 from ..deps import get_current_user, require_admin
 from ..models import ChannelUpdateRequest, ReportCreatedOut, ReportDetailOut, ReportOut, RowsOut
-from ..query_engine import get_local_parquet
+from ..query_engine import get_local_parquet_async
 
 router = APIRouter(prefix="/api/adjustments-reports", tags=["adjustments-reports"])
 
@@ -32,8 +33,12 @@ ADJUSTMENT_COLUMNS = [
 
 async def _process_adjustments_report(report_id: str, xlsx_bytes) -> None:
     try:
-        parquet_bytes, row_count, mapping = adjustment_excel_to_parquet(io.BytesIO(xlsx_bytes))
-        storage.upload_bytes(storage.adjustments_parquet_key(report_id), parquet_bytes, "application/octet-stream")
+        parquet_bytes, row_count, mapping = await run_in_threadpool(
+            adjustment_excel_to_parquet, io.BytesIO(xlsx_bytes)
+        )
+        await run_in_threadpool(
+            storage.upload_bytes, storage.adjustments_parquet_key(report_id), parquet_bytes, "application/octet-stream"
+        )
         await db.pg_update(
             "adjustments_reports",
             {"id": f"eq.{report_id}"},
@@ -66,7 +71,8 @@ async def create_adjustments_report(
     report_id = str(uuid.uuid4())
     xlsx_bytes = await file.read()
 
-    storage.upload_bytes(
+    await run_in_threadpool(
+        storage.upload_bytes,
         storage.adjustments_original_key(report_id, file.filename),
         xlsx_bytes,
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -122,21 +128,25 @@ async def get_adjustments_rows(
     if row["status"] != "ready":
         raise HTTPException(status_code=409, detail=f"Report đang ở trạng thái {row['status']}, chưa sẵn sàng.")
 
-    path = get_local_parquet(report_id, row["parquet_key"])
+    path = await get_local_parquet_async(report_id, row["parquet_key"])
     page = max(1, page)
-    con = duckdb.connect(database=":memory:")
-    try:
-        total = con.execute("SELECT COUNT(*) FROM read_parquet(?)", [path]).fetchone()[0]
-        offset = (page - 1) * pageSize
-        cols_sql = ", ".join(f'"{c}"' for c in ADJUSTMENT_COLUMNS)
-        cursor = con.execute(
-            f'SELECT {cols_sql} FROM read_parquet(?) LIMIT ? OFFSET ?', [path, pageSize, offset]
-        )
-        col_names = [d[0] for d in cursor.description]
-        rows = [dict(zip(col_names, r)) for r in cursor.fetchall()]
-        return {"rows": rows, "total": total, "page": page, "pageSize": pageSize}
-    finally:
-        con.close()
+
+    def _query_page():
+        con = duckdb.connect(database=":memory:")
+        try:
+            total = con.execute("SELECT COUNT(*) FROM read_parquet(?)", [path]).fetchone()[0]
+            offset = (page - 1) * pageSize
+            cols_sql = ", ".join(f'"{c}"' for c in ADJUSTMENT_COLUMNS)
+            cursor = con.execute(
+                f'SELECT {cols_sql} FROM read_parquet(?) LIMIT ? OFFSET ?', [path, pageSize, offset]
+            )
+            col_names = [d[0] for d in cursor.description]
+            rows = [dict(zip(col_names, r)) for r in cursor.fetchall()]
+            return {"rows": rows, "total": total, "page": page, "pageSize": pageSize}
+        finally:
+            con.close()
+
+    return await run_in_threadpool(_query_page)
 
 
 @router.patch("/{report_id}/channel")

@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 
 import duckdb
+from starlette.concurrency import run_in_threadpool
 
 from . import storage
 from .config import get_settings
@@ -87,6 +88,18 @@ def get_local_parquet(report_id: str, parquet_object_key: str) -> str:
     if not os.path.exists(local_path):
         storage.download_to_path(parquet_object_key, local_path)
     return local_path
+
+
+async def get_local_parquet_async(report_id: str, parquet_object_key: str) -> str:
+    """Thread-pooled wrapper — get_local_parquet's R2 download (boto3, sync)
+    would otherwise block the event loop for every OTHER concurrent request
+    while a cold cache re-downloads a Report's Parquet. Callers that need
+    several Reports' Parquets (see routers/dashboard.py's
+    _all_ready_*_parquet_paths) should asyncio.gather() a list of these
+    instead of awaiting them one at a time, so multiple downloads happen
+    concurrently too.
+    """
+    return await run_in_threadpool(get_local_parquet, report_id, parquet_object_key)
 
 
 def invalidate_local_parquet_cache(report_id: str) -> None:
