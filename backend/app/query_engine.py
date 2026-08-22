@@ -9,6 +9,7 @@ server-side so the browser never needs the full row set.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 
 import duckdb
@@ -90,6 +91,9 @@ def get_local_parquet(report_id: str, parquet_object_key: str) -> str:
     return local_path
 
 
+_download_locks: dict[str, asyncio.Lock] = {}
+
+
 async def get_local_parquet_async(report_id: str, parquet_object_key: str) -> str:
     """Thread-pooled wrapper — get_local_parquet's R2 download (boto3, sync)
     would otherwise block the event loop for every OTHER concurrent request
@@ -98,8 +102,24 @@ async def get_local_parquet_async(report_id: str, parquet_object_key: str) -> st
     _all_ready_*_parquet_paths) should asyncio.gather() a list of these
     instead of awaiting them one at a time, so multiple downloads happen
     concurrently too.
+
+    Also coalesces concurrent downloads of the SAME report across separate
+    HTTP requests: the frontend fires /summary and /rows together on every
+    filter change, and on a cold cache both would otherwise independently
+    download the same Parquet from R2. A per-report_id lock makes the
+    second caller wait for the first's download instead of duplicating it
+    (the os.path.exists check after acquiring the lock is what turns that
+    wait into a cache hit).
     """
-    return await run_in_threadpool(get_local_parquet, report_id, parquet_object_key)
+    s = get_settings()
+    local_path = os.path.join(s.parquet_cache_dir, f"{report_id}.parquet")
+    if os.path.exists(local_path):
+        return local_path
+    lock = _download_locks.setdefault(report_id, asyncio.Lock())
+    async with lock:
+        if not os.path.exists(local_path):
+            await run_in_threadpool(get_local_parquet, report_id, parquet_object_key)
+    return local_path
 
 
 def invalidate_local_parquet_cache(report_id: str) -> None:
@@ -429,6 +449,28 @@ def _build_orders_working(
     )
 
 
+def _prepare_orders_working(
+    con, parquet_source, from_date, to_date, category, status, warehouse_type,
+    item_group, product_type, sku, sales_channel,
+    combo_source, cashflow_source, master_source, channel_source,
+) -> tuple[str, list]:
+    """Shared setup for every run_*_query function below: builds the WHERE
+    clause for the requested filters and materializes orders_working on
+    `con` for them to query. Factored out because all four functions need
+    the identical two steps in the identical order.
+    """
+    where_sql, params = _where_clause(
+        from_date, to_date, category, status, warehouse_type, item_group, product_type, sku,
+        sales_channel,
+    )
+    available = _available_columns(con, parquet_source)
+    _build_orders_working(
+        con, parquet_source, available, combo_source, cashflow_source, master_source, channel_source,
+        from_date=from_date, to_date=to_date,
+    )
+    return where_sql, params
+
+
 def run_summary_query(
     parquet_source, from_date=None, to_date=None, category=None, status=None,
     cashflow_source=None, combo_source=None, master_source=None,
@@ -440,14 +482,10 @@ def run_summary_query(
 
     con = _connect()
     try:
-        where_sql, params = _where_clause(
-            from_date, to_date, category, status, warehouse_type, item_group, product_type, sku,
-            sales_channel,
-        )
-        available = _available_columns(con, parquet_source)
-        _build_orders_working(
-            con, parquet_source, available, combo_source, cashflow_source, master_source, channel_source,
-            from_date=from_date, to_date=to_date,
+        where_sql, params = _prepare_orders_working(
+            con, parquet_source, from_date, to_date, category, status, warehouse_type,
+            item_group, product_type, sku, sales_channel,
+            combo_source, cashflow_source, master_source, channel_source,
         )
 
         totals_sql = f"""
@@ -562,6 +600,24 @@ def _apply_path_filters(where_sql: str, params: list, path_filters) -> str:
     return where_sql
 
 
+def _apply_search_filter(where_sql: str, params: list, search: str | None) -> str:
+    """Appends a case-insensitive LIKE filter across product/category/
+    customer/orderId/sku/skuVariant, matching the "Tìm kiếm" box in the
+    Detail-table sub-tab (run_rows_query, run_grouped_rows_query,
+    run_export_query all offer this same search).
+    """
+    if not search:
+        return where_sql
+    where_sql += (
+        ' AND (lower("product") LIKE ? OR lower("category") LIKE ? OR '
+        'lower("customer") LIKE ? OR lower("orderId") LIKE ? OR '
+        'lower("sku") LIKE ? OR lower("skuVariant") LIKE ?)'
+    )
+    like = f"%{search.lower()}%"
+    params.extend([like] * 6)
+    return where_sql
+
+
 def run_rows_query(
     parquet_source,
     from_date=None, to_date=None, category=None, status=None,
@@ -576,29 +632,17 @@ def run_rows_query(
 
     con = _connect()
     try:
-        where_sql, params = _where_clause(
-            from_date, to_date, category, status, warehouse_type, item_group, product_type, sku,
-            sales_channel,
-        )
-        available = _available_columns(con, parquet_source)
-        _build_orders_working(
-            con, parquet_source, available, combo_source, cashflow_source, master_source, channel_source,
-            from_date=from_date, to_date=to_date,
+        where_sql, params = _prepare_orders_working(
+            con, parquet_source, from_date, to_date, category, status, warehouse_type,
+            item_group, product_type, sku, sales_channel,
+            combo_source, cashflow_source, master_source, channel_source,
         )
 
         # Drill-down request from a (possibly nested) group node in the
         # Detail-table's grouped view — narrows to exactly that node's
         # underlying raw rows, one equality filter per ancestor level.
         where_sql = _apply_path_filters(where_sql, params, path_filters)
-
-        if search:
-            where_sql += (
-                ' AND (lower("product") LIKE ? OR lower("category") LIKE ? OR '
-                'lower("customer") LIKE ? OR lower("orderId") LIKE ? OR '
-                'lower("sku") LIKE ? OR lower("skuVariant") LIKE ?)'
-            )
-            like = f"%{search.lower()}%"
-            params.extend([like] * 6)
+        where_sql = _apply_search_filter(where_sql, params, search)
 
         total = con.execute(
             f'SELECT COUNT(*) FROM orders_working WHERE {where_sql}', params
@@ -693,25 +737,13 @@ def run_grouped_rows_query(
 
     con = _connect()
     try:
-        where_sql, params = _where_clause(
-            from_date, to_date, category, status, warehouse_type, item_group, product_type, sku,
-            sales_channel,
-        )
-        available = _available_columns(con, parquet_source)
-        _build_orders_working(
-            con, parquet_source, available, combo_source, cashflow_source, master_source, channel_source,
-            from_date=from_date, to_date=to_date,
+        where_sql, params = _prepare_orders_working(
+            con, parquet_source, from_date, to_date, category, status, warehouse_type,
+            item_group, product_type, sku, sales_channel,
+            combo_source, cashflow_source, master_source, channel_source,
         )
         where_sql = _apply_path_filters(where_sql, params, path_filters)
-
-        if search:
-            where_sql += (
-                ' AND (lower("product") LIKE ? OR lower("category") LIKE ? OR '
-                'lower("customer") LIKE ? OR lower("orderId") LIKE ? OR '
-                'lower("sku") LIKE ? OR lower("skuVariant") LIKE ?)'
-            )
-            like = f"%{search.lower()}%"
-            params.extend([like] * 6)
+        where_sql = _apply_search_filter(where_sql, params, search)
 
         total = con.execute(
             f'SELECT COUNT(DISTINCT "{group_col}") FROM orders_working WHERE {where_sql}', params
@@ -754,24 +786,12 @@ def run_export_query(
 
     con = _connect()
     try:
-        where_sql, params = _where_clause(
-            from_date, to_date, category, status, warehouse_type, item_group, product_type, sku,
-            sales_channel,
+        where_sql, params = _prepare_orders_working(
+            con, parquet_source, from_date, to_date, category, status, warehouse_type,
+            item_group, product_type, sku, sales_channel,
+            combo_source, cashflow_source, master_source, channel_source,
         )
-        available = _available_columns(con, parquet_source)
-        _build_orders_working(
-            con, parquet_source, available, combo_source, cashflow_source, master_source, channel_source,
-            from_date=from_date, to_date=to_date,
-        )
-
-        if search:
-            where_sql += (
-                ' AND (lower("product") LIKE ? OR lower("category") LIKE ? OR '
-                'lower("customer") LIKE ? OR lower("orderId") LIKE ? OR '
-                'lower("sku") LIKE ? OR lower("skuVariant") LIKE ?)'
-            )
-            like = f"%{search.lower()}%"
-            params.extend([like] * 6)
+        where_sql = _apply_search_filter(where_sql, params, search)
 
         if group_by and group_by in GROUP_BY_COLUMNS:
             group_col = GROUP_BY_COLUMNS[group_by]
