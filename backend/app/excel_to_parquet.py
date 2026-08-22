@@ -136,8 +136,13 @@ def build_dashboard_rows(raw_rows: list[dict], mapping: dict) -> list[dict]:
             "revenue": revenue,
             "status": derived["status"],
             "orderId": _text_or_empty(row, mapping, "orderId"),
+            # "sku" (the parent code) is deliberately NOT persisted here:
+            # query_engine.py always recomputes it from skuVariant at query
+            # time (split_part(..., '-', 1)), because a Combo explosion can
+            # swap in a different skuVariant than the one this row derived
+            # from — a stored "sku" would go stale in that case, and no
+            # query reads it back anyway.
             "skuVariant": derived["skuVariant"],
-            "sku": derived["sku"],
             "originalPrice": derived["originalPrice"],
             "returnedQty": derived["returnedQty"],
             "soLuongThuc": derived["soLuongThuc"],

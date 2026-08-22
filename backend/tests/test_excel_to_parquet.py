@@ -58,10 +58,12 @@ def test_excel_to_parquet_end_to_end():
     gmv = by_status.get("Hoàn thành", 0) + by_status.get("Đang giao", 0)
     assert gmv == 360000
 
-    # SKU parent-code derivation survived the full pipeline.
+    # skuVariant survives the full pipeline; the parent "sku" code is
+    # deliberately not persisted (query_engine.py recomputes it from
+    # skuVariant at query time — see test_derive.py and test_query_engine.py).
     row_a = df[df["orderId"] == "O1"].iloc[0]
     assert row_a["skuVariant"] == "A100-1"
-    assert row_a["sku"] == "A100"
+    assert "sku" not in df.columns
 
 
 def test_missing_date_column_raises():
