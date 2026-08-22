@@ -297,9 +297,28 @@ def _channel_tagged_source_sql(parquet_source, channel_groups: dict | None) -> t
     return " UNION ALL BY NAME ".join(parts), params
 
 
+def _base_date_filter_sql(from_date, to_date) -> tuple[str, list]:
+    """Same from/to semantics as _where_clause's date clause, but meant to
+    run against the raw per-Report source BEFORE the Combo/Cashflow/Master
+    joins — pruning to the requested range there (instead of only in the
+    outer WHERE, after joining/exploding every historical row) is what lets
+    a date-scoped view (e.g. the Dashboard's "Tháng này" default) actually
+    scan less data rather than just display less of it.
+    """
+    clauses = []
+    params: list = []
+    if from_date:
+        clauses.append('"date" >= CAST(? AS DATE)')
+        params.append(from_date)
+    if to_date:
+        clauses.append('"date" < (CAST(? AS DATE) + INTERVAL 1 DAY)')
+        params.append(to_date)
+    return (f"WHERE {' AND '.join(clauses)}" if clauses else ""), params
+
+
 def _build_orders_working(
     con, parquet_source, available: set, combo_source, cashflow_source, master_source,
-    channel_source: dict | None = None,
+    channel_source: dict | None = None, from_date=None, to_date=None,
 ) -> None:
     """Materializes a TEMP TABLE "orders_working" combining the Combo
     explosion and the Phí AFF join exactly once per call — every query below
@@ -324,6 +343,7 @@ def _build_orders_working(
         master_source, sku_variant_expr
     )
     channel_source_sql, channel_params = _channel_tagged_source_sql(parquet_source, channel_source)
+    date_filter_sql, date_filter_params = _base_date_filter_sql(from_date, to_date)
 
     # Combo-exploded children report "combo" for the 3 category labels
     # instead of a Master File lookup (confirmed with the user) — Giá vốn
@@ -398,12 +418,15 @@ def _build_orders_working(
           {nmv_row_expr} AS "nmv",
           {loi_nhuan_gop_row_expr} AS "loiNhuanGop",
           o."salesChannel" AS "salesChannel"
-        FROM ({channel_source_sql}) o
+        FROM (SELECT * FROM ({channel_source_sql}) t {date_filter_sql}) o
         {combo_join_sql}
         {cashflow_join_sql}
         {master_join_sql}
     """
-    con.execute(create_sql, [*channel_params, *combo_params, *cashflow_params, *master_params])
+    con.execute(
+        create_sql,
+        [*channel_params, *date_filter_params, *combo_params, *cashflow_params, *master_params],
+    )
 
 
 def run_summary_query(
@@ -424,6 +447,7 @@ def run_summary_query(
         available = _available_columns(con, parquet_source)
         _build_orders_working(
             con, parquet_source, available, combo_source, cashflow_source, master_source, channel_source,
+            from_date=from_date, to_date=to_date,
         )
 
         totals_sql = f"""
@@ -470,8 +494,11 @@ def run_summary_query(
         category_breakdown = top_n("category")
         top_customers = top_n("customer")
 
-        # Facets are computed over every row (no filters applied) so the
-        # dropdown options don't shrink as the user filters.
+        # Facets ignore every filter EXCEPT the date range (orders_working
+        # itself is already date-scoped, per _build_orders_working) — the
+        # dropdown options don't shrink as the user picks a category/status/
+        # etc., but they do reflect whatever time range is selected, same as
+        # the KPIs.
         facets_sql = """
             SELECT
               list(DISTINCT "category") AS categories,
@@ -556,6 +583,7 @@ def run_rows_query(
         available = _available_columns(con, parquet_source)
         _build_orders_working(
             con, parquet_source, available, combo_source, cashflow_source, master_source, channel_source,
+            from_date=from_date, to_date=to_date,
         )
 
         # Drill-down request from a (possibly nested) group node in the
@@ -672,6 +700,7 @@ def run_grouped_rows_query(
         available = _available_columns(con, parquet_source)
         _build_orders_working(
             con, parquet_source, available, combo_source, cashflow_source, master_source, channel_source,
+            from_date=from_date, to_date=to_date,
         )
         where_sql = _apply_path_filters(where_sql, params, path_filters)
 
@@ -732,6 +761,7 @@ def run_export_query(
         available = _available_columns(con, parquet_source)
         _build_orders_working(
             con, parquet_source, available, combo_source, cashflow_source, master_source, channel_source,
+            from_date=from_date, to_date=to_date,
         )
 
         if search:

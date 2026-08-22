@@ -29,7 +29,21 @@ def _is_nan(v) -> bool:
 
 
 def read_excel_rows(file_like, sheet_name=0) -> tuple[list[dict], list[str]]:
-    df = pd.read_excel(file_like, sheet_name=sheet_name, keep_default_na=False, dtype=object)
+    # openpyxl's default mode builds a full in-memory Cell/style object graph
+    # for every cell, which dominates upload time on large sheets;
+    # read_only=True switches it to a lazy row iterator instead (values
+    # only, no styles), several times faster and lighter on memory. Falls
+    # back to the plain auto-detected engine for non-.xlsx uploads (.xls,
+    # which openpyxl can't read at all) rather than failing the upload.
+    try:
+        df = pd.read_excel(
+            file_like, sheet_name=sheet_name, keep_default_na=False, dtype=object,
+            engine="openpyxl", engine_kwargs={"read_only": True, "data_only": True},
+        )
+    except Exception:
+        if hasattr(file_like, "seek"):
+            file_like.seek(0)
+        df = pd.read_excel(file_like, sheet_name=sheet_name, keep_default_na=False, dtype=object)
     headers = [str(c).strip() for c in df.columns]
     df.columns = headers
     rows = df.to_dict(orient="records")

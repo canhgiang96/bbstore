@@ -998,7 +998,14 @@
       .map(y => `<option value="${y}">${y}</option>`).join("");
     el("customQuarterYear").innerHTML = yearOptionsHtml;
     el("customYear").innerHTML = yearOptionsHtml;
-    el("timeFilterList").querySelector('.time-preset-btn[data-preset=""]').classList.add("active");
+    // Default to "Tháng này" instead of all-time — an unbounded dashboard
+    // load rescans every historical Report on every open, which is the
+    // slowest possible first paint; scoping to the current month by default
+    // also lets the backend push the date range into the Parquet scan
+    // itself (see query_engine.py's _build_orders_working) instead of
+    // filtering after joining the entire history.
+    const defaultRange = computePresetRange("thisMonth");
+    setTimeFilter(defaultRange.from, defaultRange.to, TIME_PRESET_LABELS.thisMonth, "thisMonth");
 
     el("timeFilterList").querySelectorAll(".time-preset-btn").forEach(btn => {
       btn.onclick = () => {
