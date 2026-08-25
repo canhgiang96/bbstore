@@ -536,6 +536,7 @@
     selectedSalesChannel: new Set(),
     salesChannels: [], // raw {id,name,...} list from /api/sales-channels — see refreshSalesChannelsCache
     lastFacets: null, // cached so "Xóa lọc" can redraw the checkbox lists without waiting on a fetch
+    lastKpis: null, // cached so exportOverviewExcel() can reuse exactly what's on screen, no extra fetch
     filtersWired: false,
     summarySeq: 0,
     detailSeq: 0,
@@ -825,6 +826,7 @@
     };
     el("detailNext").onclick = () => { dash.detailPage++; clearGroupState(); fetchAndRenderDetailTable(); };
     el("btnExportExcel").onclick = () => exportExcel();
+    el("btnExportOverviewExcel").onclick = () => exportOverviewExcel();
     wireSubtabs();
     wireTimeFilter();
     ensureVisibleCols();
@@ -899,52 +901,46 @@
   }
 
   /* ---- KPIs ---- */
-  // Percentage of a row's first ("base") KPI card, shown on every other
-  // card in that row — e.g. Phí sàn/Phí Piship/Phí AFF each show their
-  // share of Doanh thu thuần, the row's first card.
+  // Percentage of a card's "base" value — e.g. Phí sàn/Phí Piship/Phí AFF
+  // each show their share of Doanh thu thuần, and GMV shows its share of
+  // Doanh số (the previous row's base) — see KPI_CARDS' base fields below.
   function fmtPercentOfBase(value, base) {
     if (!base) return "";
     return (value / base * 100).toLocaleString("vi-VN", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "%";
   }
 
+  // One entry per KPI card, in the exact order they appear on the
+  // Overview tab (row by row) — the single source of truth for both
+  // renderKPIs (fills the on-screen cards) and exportOverviewExcel
+  // (writes the same numbers to a spreadsheet), so the two can't drift.
+  // `base` is omitted for a row's own first card except where it's also
+  // shown as a % of the PREVIOUS row's base (GMV/Doanh thu thuần/NMV/Lợi
+  // nhuận gộp — the "funnel" ratios); "Doanh số" itself has no base.
+  const KPI_CARDS = [
+    { label: "Doanh số", valueId: "kpiDoanhSo", value: k => k.doanhSo },
+    { label: "Doanh số hủy chưa XK", valueId: "kpiHuyChuaXK", pctId: "kpiHuyChuaXKPct", value: k => k.huyChuaXK, base: k => k.doanhSo, note: "Hủy trước khi xuất kho" },
+    { label: "Doanh số hủy sau XK", valueId: "kpiHuySauXK", pctId: "kpiHuySauXKPct", value: k => k.huySauXK, base: k => k.doanhSo, note: "Hủy do giao hàng thất bại" },
+    { label: "Doanh số hoàn", valueId: "kpiHoan", pctId: "kpiHoanPct", value: k => k.hoan, base: k => k.doanhSo, note: "Giá gốc x SL hoàn trả" },
+    { label: "GMV", valueId: "kpiDoanhSoThuan", pctId: "kpiDoanhSoThuanPct", value: k => k.gmv, base: k => k.doanhSo, note: "Hoàn thành + Đang giao + Hoàn 1 phần" },
+    { label: "Giảm giá", valueId: "kpiDiscount", pctId: "kpiDiscountPct", value: k => k.discount, base: k => k.gmv, note: "Người bán trợ giá" },
+    { label: "Voucher", valueId: "kpiVoucher", pctId: "kpiVoucherPct", value: k => k.voucher, base: k => k.gmv, note: "Mã giảm giá của Shop" },
+    { label: "Doanh thu thuần", valueId: "kpiDoanhThuThuan", pctId: "kpiDoanhThuThuanPct", value: k => k.doanhThuThuan, base: k => k.gmv, note: "GMV − Giảm giá − Voucher" },
+    { label: "Phí sàn", valueId: "kpiPlatformFee", pctId: "kpiPlatformFeePct", value: k => k.platformFee, base: k => k.doanhThuThuan, note: "Phí cố định + Phí dịch vụ + Phí xử lý giao dịch" },
+    { label: "Phí Piship", valueId: "kpiPiship", pctId: "kpiPishipPct", value: k => k.piship, base: k => k.doanhThuThuan, note: "1.620 / đơn hàng" },
+    { label: "Phí AFF", valueId: "kpiPhiAff", pctId: "kpiPhiAffPct", value: k => k.phiAff, base: k => k.doanhThuThuan, note: "Phí hoa hồng Tiếp thị liên kết" },
+    { label: "NMV", valueId: "kpiNmv", pctId: "kpiNmvPct", value: k => k.nmv, base: k => k.doanhThuThuan, note: "Doanh thu thuần − Phí sàn − Phí Piship − Phí AFF" },
+    { label: "Giá vốn", valueId: "kpiGiaVon", pctId: "kpiGiaVonPct", value: k => k.giaVon, base: k => k.doanhThuThuan, note: "Số lượng thực x Giá vốn (Master File)" },
+    { label: "Lợi nhuận gộp", valueId: "kpiLoiNhuanGop", pctId: "kpiLoiNhuanGopPct", value: k => k.loiNhuanGop, base: k => k.doanhThuThuan, note: "NMV − Giá vốn" },
+  ];
+
   function renderKPIs(kpis) {
-    el("kpiDoanhSo").textContent = fmtNumber(kpis.doanhSo);
-    el("kpiDoanhSoThuan").textContent = fmtNumber(kpis.gmv);
-    el("kpiDiscount").textContent = fmtNumber(kpis.discount);
-    el("kpiVoucher").textContent = fmtNumber(kpis.voucher);
-    el("kpiDoanhThuThuan").textContent = fmtNumber(kpis.doanhThuThuan);
-    el("kpiNmv").textContent = fmtNumber(kpis.nmv);
-    el("kpiHuyChuaXK").textContent = fmtNumber(kpis.huyChuaXK);
-    el("kpiHuySauXK").textContent = fmtNumber(kpis.huySauXK);
-    el("kpiHoan").textContent = fmtNumber(kpis.hoan);
-    el("kpiPlatformFee").textContent = fmtNumber(kpis.platformFee);
-    el("kpiPiship").textContent = fmtNumber(kpis.piship);
-    el("kpiPhiAff").textContent = fmtNumber(kpis.phiAff);
-    el("kpiGiaVon").textContent = fmtNumber(kpis.giaVon);
-    el("kpiLoiNhuanGop").textContent = fmtNumber(kpis.loiNhuanGop);
+    dash.lastKpis = kpis;
+    KPI_CARDS.forEach(card => {
+      const value = card.value(kpis);
+      el(card.valueId).textContent = fmtNumber(value);
+      if (card.pctId) el(card.pctId).textContent = fmtPercentOfBase(value, card.base(kpis));
+    });
     el("kpiDoanhSoSub").textContent = `${kpis.rowCount.toLocaleString("vi-VN")} dòng dữ liệu`;
-
-    // Row 1 base: Doanh số. Row 2 base: GMV. Row 3 base: Doanh thu thuần.
-    // Row 4 (Giá vốn): also against Doanh thu thuần, not NMV — matches
-    // the other cost/fee ratios above it. (Row 5, Lợi nhuận gộp, is
-    // alone in its row.)
-    el("kpiHuyChuaXKPct").textContent = fmtPercentOfBase(kpis.huyChuaXK, kpis.doanhSo);
-    el("kpiHuySauXKPct").textContent = fmtPercentOfBase(kpis.huySauXK, kpis.doanhSo);
-    el("kpiHoanPct").textContent = fmtPercentOfBase(kpis.hoan, kpis.doanhSo);
-    el("kpiDiscountPct").textContent = fmtPercentOfBase(kpis.discount, kpis.gmv);
-    el("kpiVoucherPct").textContent = fmtPercentOfBase(kpis.voucher, kpis.gmv);
-    el("kpiPlatformFeePct").textContent = fmtPercentOfBase(kpis.platformFee, kpis.doanhThuThuan);
-    el("kpiPishipPct").textContent = fmtPercentOfBase(kpis.piship, kpis.doanhThuThuan);
-    el("kpiPhiAffPct").textContent = fmtPercentOfBase(kpis.phiAff, kpis.doanhThuThuan);
-    el("kpiGiaVonPct").textContent = fmtPercentOfBase(kpis.giaVon, kpis.doanhThuThuan);
-
-    // Cross-row funnel ratios — each row's own "base" (first) card also
-    // shows its ratio against the PREVIOUS row's base: GMV/Doanh số,
-    // Doanh thu thuần/GMV, NMV/Doanh thu thuần, Lợi nhuận gộp/Doanh thu thuần.
-    el("kpiDoanhSoThuanPct").textContent = fmtPercentOfBase(kpis.gmv, kpis.doanhSo);
-    el("kpiDoanhThuThuanPct").textContent = fmtPercentOfBase(kpis.doanhThuThuan, kpis.gmv);
-    el("kpiNmvPct").textContent = fmtPercentOfBase(kpis.nmv, kpis.doanhThuThuan);
-    el("kpiLoiNhuanGopPct").textContent = fmtPercentOfBase(kpis.loiNhuanGop, kpis.doanhThuThuan);
   }
 
   /* ---- Detail table ---- */
@@ -1240,6 +1236,63 @@
     const pathFilters = dash.pathFiltersByKey.get(key) || [];
     const level = pathFilters.length - 1;
     fetchGroupNodePage(key, pathFilters, level, state.isGrouped, state.page + 1);
+  }
+
+  // Overview tab export — unlike exportExcel() (the Detail-table's row
+  // dump, which needs a fresh server-side DuckDB scan), everything here
+  // is already in the browser: dash.lastKpis (see renderKPIs) and the
+  // current filter selections. Built client-side with the SheetJS
+  // library already loaded in index.html, no backend round-trip needed.
+  async function exportOverviewExcel() {
+    const btn = el("btnExportOverviewExcel");
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Đang xuất...";
+    try {
+      const kpis = dash.lastKpis;
+      if (!kpis) { alert("Chưa có dữ liệu để xuất, vui lòng thử lại sau khi Dashboard tải xong."); return; }
+
+      const setLabel = s => (s.size ? [...s].join(", ") : "Tất cả");
+      const filterRows = [
+        ["Tiêu chí", "Giá trị"],
+        ["Khoảng thời gian", dash.timeLabel],
+        ["Trạng thái", setLabel(dash.selectedStatus)],
+        ["Phân loại kho", setLabel(dash.selectedWarehouseType)],
+        ["Phân loại mục", setLabel(dash.selectedItemGroup)],
+        ["Phân loại sản phẩm", setLabel(dash.selectedProductType)],
+        ["Kênh bán hàng", setLabel(dash.selectedSalesChannel)],
+        ["SKU", el("filterSku").value.trim() || "Tất cả"],
+      ];
+
+      const kpiRows = KPI_CARDS.map(card => {
+        const value = card.value(kpis);
+        const pct = card.pctId ? fmtPercentOfBase(value, card.base(kpis)) : "";
+        const note = card.valueId === "kpiDoanhSo"
+          ? `${kpis.rowCount.toLocaleString("vi-VN")} dòng dữ liệu`
+          : (card.note || "");
+        return [card.label, value, pct, note];
+      });
+
+      const sheetRows = [
+        ["BỘ LỌC ĐANG ÁP DỤNG"],
+        ...filterRows,
+        [],
+        ["CHỈ SỐ TỔNG QUAN"],
+        ["Chỉ số", "Giá trị (VNĐ)", "Tỉ lệ", "Ghi chú"],
+        ...kpiRows,
+      ];
+
+      const ws = XLSX.utils.aoa_to_sheet(sheetRows);
+      ws["!cols"] = [{ wch: 26 }, { wch: 18 }, { wch: 10 }, { wch: 45 }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Tổng quan");
+      XLSX.writeFile(wb, `tong-quan-${new Date().toISOString().slice(0, 10)}.xlsx`);
+    } catch (err) {
+      alert("Lỗi xuất Excel: " + err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalText;
+    }
   }
 
   async function exportExcel() {

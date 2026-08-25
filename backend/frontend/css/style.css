@@ -207,6 +207,7 @@ select, input[type="text"], input[type="date"] {
 .filter-checkbox input { width: 16px; height: 16px; cursor: pointer; }
 
 /* KPI */
+.overview-header { display: flex; justify-content: flex-end; margin-bottom: 16px; }
 .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
 .kpi-grid-3 { grid-template-columns: repeat(3, 1fr); }
 .kpi-grid-2 { grid-template-columns: repeat(2, 1fr); }
