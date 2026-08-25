@@ -16,7 +16,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .derive import compute_discount, compute_piship_fee, compute_platform_fee, compute_voucher, derive_row_fields
-from .mapping import detect_mapping
+from .mapping import FIELDS, detect_mapping
 from .parsing import parse_date_value, to_number
 
 
@@ -89,27 +89,27 @@ def _order_fallback_weight_totals(raw_rows: list[dict], mapping: dict) -> dict:
     """Fallback proration denominator for when "Số tiền người mua thanh
     toán" isn't mapped, so _order_paid_totals is empty and Voucher/Phí sàn
     would otherwise always come out 0 for the whole report (order_paid_ratio
-    dividing by a missing total). Weight is "Số lượng" when that's mapped
-    (quantity share), else a plain 1 per line (equal split across the
-    order's lines) — either way, summing the resulting ratio back across
-    an order's lines reconciles to the order-level total instead of
-    silently losing it.
+    dividing by a missing total). Prorates by "Số lượng" (quantity share)
+    instead — summing the resulting ratio back across an order's lines
+    reconciles to the order-level total instead of silently losing it.
+    "orderId"/"quantity" are both required fields (see mapping.FIELDS), so
+    both columns are always present here.
     """
-    order_col = mapping.get("orderId")
-    qty_col = mapping.get("quantity")
+    order_col = mapping["orderId"]
+    qty_col = mapping["quantity"]
     totals: dict = {}
-    if not order_col:
-        return totals
     for row in raw_rows:
         order_id = row.get(order_col)
-        weight = to_number(row.get(qty_col)) if qty_col else 1.0
-        totals[order_id] = totals.get(order_id, 0.0) + weight
+        totals[order_id] = totals.get(order_id, 0.0) + to_number(row.get(qty_col))
     return totals
 
 
 def build_dashboard_rows(raw_rows: list[dict], mapping: dict) -> list[dict]:
+    # "orderId" is validated as required by excel_to_parquet() before this
+    # ever runs, so order_col is always truthy here — every row can always
+    # be grouped into its real order (Piship/proration below rely on this).
     date_col = mapping.get("date")
-    order_col = mapping.get("orderId")
+    order_col = mapping["orderId"]
     paid_col = mapping.get("buyerPaidAmount")
     order_paid_totals = _order_paid_totals(raw_rows, mapping)
     order_fallback_weight_totals = {} if paid_col else _order_fallback_weight_totals(raw_rows, mapping)
@@ -125,27 +125,25 @@ def build_dashboard_rows(raw_rows: list[dict], mapping: dict) -> list[dict]:
 
         price = to_number(row.get(mapping["price"])) if mapping.get("price") else 0.0
         revenue = to_number(row.get(mapping["revenue"])) if mapping.get("revenue") else None
-        if revenue is None and mapping.get("price") and mapping.get("quantity"):
-            revenue = price * derived["quantity"]
+        if revenue is None and mapping.get("price"):
+            revenue = price * derived["quantity"]  # "quantity" is a required field, always mapped
         if revenue is None:
             revenue = 0.0
 
         seller_subsidy = to_number(row.get(mapping["sellerSubsidy"])) if mapping.get("sellerSubsidy") else 0.0
         shop_voucher = to_number(row.get(mapping["shopVoucher"])) if mapping.get("shopVoucher") else 0.0
         if paid_col:
-            order_total_paid = order_paid_totals.get(row.get(order_col)) if order_col else None
+            order_total_paid = order_paid_totals.get(row.get(order_col))
             line_paid = to_number(row.get(paid_col))
             order_paid_ratio = (line_paid / order_total_paid) if order_total_paid else 0.0
-        elif order_col:
-            order_total_weight = order_fallback_weight_totals.get(row.get(order_col))
-            line_weight = to_number(row.get(mapping["quantity"])) if mapping.get("quantity") else 1.0
-            order_paid_ratio = (line_weight / order_total_weight) if order_total_weight else 0.0
         else:
-            # No "Mã đơn hàng" at all -> we can't group lines into orders,
-            # so is_first_line_of_order below already treats each row as
-            # its own whole order -> this row's order-level Voucher/Phí
-            # sàn value IS the whole order's value (ratio 1, not 0).
-            order_paid_ratio = 1.0
+            # "Số tiền người mua thanh toán" isn't mapped (unlike the
+            # required fields, this one legitimately isn't always present
+            # — see test_discount_and_voucher_default_to_zero_when_columns_absent)
+            # -> prorate by quantity share instead of payment share.
+            order_total_weight = order_fallback_weight_totals.get(row.get(order_col))
+            line_weight = derived["quantity"]
+            order_paid_ratio = (line_weight / order_total_weight) if order_total_weight else 0.0
 
         discount = compute_discount(seller_subsidy, derived["quantity"], derived["soLuongThuc"])
         voucher = compute_voucher(shop_voucher, order_paid_ratio, derived["quantity"], derived["soLuongThuc"])
@@ -155,18 +153,9 @@ def build_dashboard_rows(raw_rows: list[dict], mapping: dict) -> list[dict]:
         transaction_fee = to_number(row.get(mapping["transactionFee"])) if mapping.get("transactionFee") else 0.0
         platform_fee = compute_platform_fee(fixed_fee, service_fee, transaction_fee, order_paid_ratio)
 
-        if order_col:
-            order_key = row.get(order_col)
-            is_first_line_of_order = order_key not in seen_order_ids
-            seen_order_ids.add(order_key)
-        else:
-            # No "Mã đơn hàng" at all -> there's no way to tell which rows
-            # share an order, so treat every row as its own order (each
-            # gets its own Phí Piship) rather than treating every row
-            # after the very first as a continuation of one giant order
-            # (which used to collapse Phí Piship down to a single 1.620
-            # for the whole report).
-            is_first_line_of_order = True
+        order_key = row.get(order_col)
+        is_first_line_of_order = order_key not in seen_order_ids
+        seen_order_ids.add(order_key)
         piship_fee = compute_piship_fee(is_first_line_of_order)
 
         out.append({
@@ -234,10 +223,16 @@ def excel_to_parquet(file_like, sheet_name=0, mapping_override: dict | None = No
     # Drop blank/unset entries so downstream `mapping.get(field)` checks stay falsy.
     mapping = {k: v for k, v in mapping.items() if v}
 
-    if "date" not in mapping:
-        raise MappingError("Không tìm thấy cột Ngày trong file.")
-    if "revenue" not in mapping and not ("price" in mapping and "quantity" in mapping):
-        raise MappingError("Không tìm thấy cột Doanh thu, hoặc cả Đơn giá và Số lượng để tự tính.")
+    # Every field marked required=True in mapping.FIELDS feeds a KPI
+    # calculation somewhere downstream (orderId -> Piship/proration,
+    # quantity/originalPrice -> Doanh số/GMV, returnedQty -> Doanh số hoàn,
+    # status/cancelReason -> trạng thái classification) — silently
+    # defaulting any of these to 0/"" produces confidently wrong numbers
+    # instead of an obviously missing one, so the upload is rejected
+    # instead of guessed at.
+    missing = [f.label for f in FIELDS if f.required and f.key not in mapping]
+    if missing:
+        raise MappingError(f"Thiếu cột bắt buộc trong file: {', '.join(missing)}.")
 
     dashboard_rows = build_dashboard_rows(raw_rows, mapping)
     if not dashboard_rows:

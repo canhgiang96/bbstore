@@ -243,12 +243,11 @@ def test_platform_fee_prorated_and_piship_assigned_to_first_line_only():
     assert single["piship"] == 1620
 
 
-def test_piship_assigned_per_row_when_orderid_not_mapped():
-    # Regression: when "Mã đơn hàng" isn't mapped, order_key used to be
-    # None for every row, and a single shared seen_order_ids set treated
-    # every row after the very first as "already seen" (since None was
-    # added to the set on row 1) — collapsing Phí Piship to a single 1.620
-    # for the entire file instead of 1.620 per row/order.
+def test_missing_orderid_column_raises():
+    # "Mã đơn hàng" is required: Piship (flat fee per order, first line
+    # only) and Voucher/Phí sàn proration both depend on being able to
+    # group rows into orders — without it there's no way to compute these
+    # correctly, so the upload is rejected rather than guessed at.
     override = {
         "date": "Ngày đặt hàng",
         "price": "Giá gốc",
@@ -261,11 +260,32 @@ def test_piship_assigned_per_row_when_orderid_not_mapped():
         "product": "Tên sản phẩm",
         # "orderId" deliberately omitted.
     }
-    parquet_bytes, row_count, mapping = excel_to_parquet(make_xlsx_bytes(), mapping_override=override)
-    assert "orderId" not in mapping
+    try:
+        excel_to_parquet(make_xlsx_bytes(), mapping_override=override)
+        assert False, "expected MappingError"
+    except MappingError as e:
+        assert "Mã đơn hàng" in str(e)
+
+
+def test_piship_assigned_only_to_first_line_of_each_order():
+    parquet_bytes, row_count, mapping = excel_to_parquet(make_xlsx_bytes())
     df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
-    assert row_count == 6
+    # ROWS above is 6 distinct single-line orders (O1..O6) -> each is its
+    # own order's first (and only) line, so each still gets 1.620.
     assert (df["piship"] == 1620).all()
+
+
+def test_missing_required_column_lists_all_missing_fields():
+    # Every field marked required=True in mapping.FIELDS must be present;
+    # a file missing several of them should name all of them, not just
+    # the first one found.
+    try:
+        excel_to_parquet(make_xlsx_bytes(), mapping_override={"date": "Ngày đặt hàng"})
+        assert False, "expected MappingError"
+    except MappingError as e:
+        msg = str(e)
+        for label in ["Mã đơn hàng", "Số lượng", "Giá gốc", "SL sản phẩm hoàn trả", "Trạng thái đơn hàng", "Lý do hủy"]:
+            assert label in msg, f"expected {label!r} in error message: {msg!r}"
 
 
 def test_voucher_and_platform_fee_fall_back_to_quantity_share_when_buyerpaidamount_not_mapped():
