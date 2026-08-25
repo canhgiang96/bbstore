@@ -925,7 +925,9 @@
     el("kpiDoanhSoSub").textContent = `${kpis.rowCount.toLocaleString("vi-VN")} dòng dữ liệu`;
 
     // Row 1 base: Doanh số. Row 2 base: GMV. Row 3 base: Doanh thu thuần.
-    // Row 4 base: NMV. (Row 5, Lợi nhuận gộp, is alone in its row.)
+    // Row 4 (Giá vốn): also against Doanh thu thuần, not NMV — matches
+    // the other cost/fee ratios above it. (Row 5, Lợi nhuận gộp, is
+    // alone in its row.)
     el("kpiHuyChuaXKPct").textContent = fmtPercentOfBase(kpis.huyChuaXK, kpis.doanhSo);
     el("kpiHuySauXKPct").textContent = fmtPercentOfBase(kpis.huySauXK, kpis.doanhSo);
     el("kpiHoanPct").textContent = fmtPercentOfBase(kpis.hoan, kpis.doanhSo);
@@ -934,7 +936,7 @@
     el("kpiPlatformFeePct").textContent = fmtPercentOfBase(kpis.platformFee, kpis.doanhThuThuan);
     el("kpiPishipPct").textContent = fmtPercentOfBase(kpis.piship, kpis.doanhThuThuan);
     el("kpiPhiAffPct").textContent = fmtPercentOfBase(kpis.phiAff, kpis.doanhThuThuan);
-    el("kpiGiaVonPct").textContent = fmtPercentOfBase(kpis.giaVon, kpis.nmv);
+    el("kpiGiaVonPct").textContent = fmtPercentOfBase(kpis.giaVon, kpis.doanhThuThuan);
 
     // Cross-row funnel ratios — each row's own "base" (first) card also
     // shows its ratio against the PREVIOUS row's base: GMV/Doanh số,
