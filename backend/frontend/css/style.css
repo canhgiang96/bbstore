@@ -222,6 +222,17 @@ select, input[type="text"], input[type="date"] {
 .kpi-label { font-size: 13px; color: var(--text-muted); font-weight: 600; }
 .kpi-value { font-size: 26px; font-weight: 800; margin-top: 6px; }
 .kpi-sub { font-size: 12.5px; color: var(--text-muted); margin-top: 4px; }
+.kpi-pct {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-radius: 999px;
+  padding: 1px 8px;
+  margin-top: 6px;
+}
+.kpi-pct:empty { display: none; }
 
 /* Charts */
 .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }

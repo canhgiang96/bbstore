@@ -899,6 +899,14 @@
   }
 
   /* ---- KPIs ---- */
+  // Percentage of a row's first ("base") KPI card, shown on every other
+  // card in that row — e.g. Phí sàn/Phí Piship/Phí AFF each show their
+  // share of Doanh thu thuần, the row's first card.
+  function fmtPercentOfBase(value, base) {
+    if (!base) return "";
+    return (value / base * 100).toLocaleString("vi-VN", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "%";
+  }
+
   function renderKPIs(kpis) {
     el("kpiDoanhSo").textContent = fmtNumber(kpis.doanhSo);
     el("kpiDoanhSoThuan").textContent = fmtNumber(kpis.gmv);
@@ -915,6 +923,18 @@
     el("kpiGiaVon").textContent = fmtNumber(kpis.giaVon);
     el("kpiLoiNhuanGop").textContent = fmtNumber(kpis.loiNhuanGop);
     el("kpiDoanhSoSub").textContent = `${kpis.rowCount.toLocaleString("vi-VN")} dòng dữ liệu`;
+
+    // Row 1 base: Doanh số. Row 2 base: GMV. Row 3 base: Doanh thu thuần.
+    // Row 4 base: NMV. (Row 5, Lợi nhuận gộp, is alone in its row.)
+    el("kpiHuyChuaXKPct").textContent = fmtPercentOfBase(kpis.huyChuaXK, kpis.doanhSo);
+    el("kpiHuySauXKPct").textContent = fmtPercentOfBase(kpis.huySauXK, kpis.doanhSo);
+    el("kpiHoanPct").textContent = fmtPercentOfBase(kpis.hoan, kpis.doanhSo);
+    el("kpiDiscountPct").textContent = fmtPercentOfBase(kpis.discount, kpis.gmv);
+    el("kpiVoucherPct").textContent = fmtPercentOfBase(kpis.voucher, kpis.gmv);
+    el("kpiPlatformFeePct").textContent = fmtPercentOfBase(kpis.platformFee, kpis.doanhThuThuan);
+    el("kpiPishipPct").textContent = fmtPercentOfBase(kpis.piship, kpis.doanhThuThuan);
+    el("kpiPhiAffPct").textContent = fmtPercentOfBase(kpis.phiAff, kpis.doanhThuThuan);
+    el("kpiGiaVonPct").textContent = fmtPercentOfBase(kpis.giaVon, kpis.nmv);
   }
 
   /* ---- Detail table ---- */
