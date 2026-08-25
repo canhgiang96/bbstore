@@ -91,6 +91,15 @@ class KpiOut(BaseModel):
     giaVon: float
     loiNhuanGop: float
     rowCount: int
+    doanhSoOrders: int
+    huyChuaXKOrders: int
+    huySauXKOrders: int
+    hoanOrders: int
+    gmvOrders: int
+    doanhThuThuanOrders: int
+    nmvOrders: int
+    pishipOrders: int
+    phiAffOrders: int
 
 
 class SeriesPoint(BaseModel):

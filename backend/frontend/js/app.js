@@ -916,22 +916,30 @@
   // `base` is omitted for a row's own first card except where it's also
   // shown as a % of the PREVIOUS row's base (GMV/Doanh thu thuần/NMV/Lợi
   // nhuận gộp — the "funnel" ratios); "Doanh số" itself has no base.
+  // `orders`/`ordersId` (only on the 9 cards that asked for it) show the
+  // COUNT(DISTINCT orderId) behind that number — see run_summary_query's
+  // *_orders columns, each scoped to the same row set as that card's own
+  // value so "how many orders" always matches what's actually summed.
   const KPI_CARDS = [
-    { label: "Doanh số", valueId: "kpiDoanhSo", value: k => k.doanhSo },
-    { label: "Doanh số hủy chưa XK", valueId: "kpiHuyChuaXK", pctId: "kpiHuyChuaXKPct", value: k => k.huyChuaXK, base: k => k.doanhSo, note: "Hủy trước khi xuất kho" },
-    { label: "Doanh số hủy sau XK", valueId: "kpiHuySauXK", pctId: "kpiHuySauXKPct", value: k => k.huySauXK, base: k => k.doanhSo, note: "Hủy do giao hàng thất bại" },
-    { label: "Doanh số hoàn", valueId: "kpiHoan", pctId: "kpiHoanPct", value: k => k.hoan, base: k => k.doanhSo, note: "Giá gốc x SL hoàn trả" },
-    { label: "GMV", valueId: "kpiDoanhSoThuan", pctId: "kpiDoanhSoThuanPct", value: k => k.gmv, base: k => k.doanhSo, note: "Hoàn thành + Đang giao + Hoàn 1 phần" },
+    { label: "Doanh số", valueId: "kpiDoanhSo", value: k => k.doanhSo, ordersId: "kpiDoanhSoOrders", orders: k => k.doanhSoOrders },
+    { label: "Doanh số hủy chưa XK", valueId: "kpiHuyChuaXK", pctId: "kpiHuyChuaXKPct", value: k => k.huyChuaXK, base: k => k.doanhSo, note: "Hủy trước khi xuất kho", ordersId: "kpiHuyChuaXKOrders", orders: k => k.huyChuaXKOrders },
+    { label: "Doanh số hủy sau XK", valueId: "kpiHuySauXK", pctId: "kpiHuySauXKPct", value: k => k.huySauXK, base: k => k.doanhSo, note: "Hủy do giao hàng thất bại", ordersId: "kpiHuySauXKOrders", orders: k => k.huySauXKOrders },
+    { label: "Doanh số hoàn", valueId: "kpiHoan", pctId: "kpiHoanPct", value: k => k.hoan, base: k => k.doanhSo, note: "Giá gốc x SL hoàn trả", ordersId: "kpiHoanOrders", orders: k => k.hoanOrders },
+    { label: "GMV", valueId: "kpiDoanhSoThuan", pctId: "kpiDoanhSoThuanPct", value: k => k.gmv, base: k => k.doanhSo, note: "Hoàn thành + Đang giao + Hoàn 1 phần", ordersId: "kpiDoanhSoThuanOrders", orders: k => k.gmvOrders },
     { label: "Giảm giá", valueId: "kpiDiscount", pctId: "kpiDiscountPct", value: k => k.discount, base: k => k.gmv, note: "Người bán trợ giá" },
     { label: "Voucher", valueId: "kpiVoucher", pctId: "kpiVoucherPct", value: k => k.voucher, base: k => k.gmv, note: "Mã giảm giá của Shop" },
-    { label: "Doanh thu thuần", valueId: "kpiDoanhThuThuan", pctId: "kpiDoanhThuThuanPct", value: k => k.doanhThuThuan, base: k => k.gmv, note: "GMV − Giảm giá − Voucher" },
+    { label: "Doanh thu thuần", valueId: "kpiDoanhThuThuan", pctId: "kpiDoanhThuThuanPct", value: k => k.doanhThuThuan, base: k => k.gmv, note: "GMV − Giảm giá − Voucher", ordersId: "kpiDoanhThuThuanOrders", orders: k => k.doanhThuThuanOrders },
     { label: "Phí sàn", valueId: "kpiPlatformFee", pctId: "kpiPlatformFeePct", value: k => k.platformFee, base: k => k.doanhThuThuan, note: "Phí cố định + Phí dịch vụ + Phí xử lý giao dịch" },
-    { label: "Phí Piship", valueId: "kpiPiship", pctId: "kpiPishipPct", value: k => k.piship, base: k => k.doanhThuThuan, note: "1.620 / đơn hàng" },
-    { label: "Phí AFF", valueId: "kpiPhiAff", pctId: "kpiPhiAffPct", value: k => k.phiAff, base: k => k.doanhThuThuan, note: "Phí hoa hồng Tiếp thị liên kết" },
-    { label: "NMV", valueId: "kpiNmv", pctId: "kpiNmvPct", value: k => k.nmv, base: k => k.doanhThuThuan, note: "Doanh thu thuần − Phí sàn − Phí Piship − Phí AFF" },
+    { label: "Phí Piship", valueId: "kpiPiship", pctId: "kpiPishipPct", value: k => k.piship, base: k => k.doanhThuThuan, note: "1.620 / đơn hàng", ordersId: "kpiPishipOrders", orders: k => k.pishipOrders },
+    { label: "Phí AFF", valueId: "kpiPhiAff", pctId: "kpiPhiAffPct", value: k => k.phiAff, base: k => k.doanhThuThuan, note: "Phí hoa hồng Tiếp thị liên kết", ordersId: "kpiPhiAffOrders", orders: k => k.phiAffOrders },
+    { label: "NMV", valueId: "kpiNmv", pctId: "kpiNmvPct", value: k => k.nmv, base: k => k.doanhThuThuan, note: "Doanh thu thuần − Phí sàn − Phí Piship − Phí AFF", ordersId: "kpiNmvOrders", orders: k => k.nmvOrders },
     { label: "Giá vốn", valueId: "kpiGiaVon", pctId: "kpiGiaVonPct", value: k => k.giaVon, base: k => k.doanhThuThuan, note: "Số lượng thực x Giá vốn (Master File)" },
     { label: "Lợi nhuận gộp", valueId: "kpiLoiNhuanGop", pctId: "kpiLoiNhuanGopPct", value: k => k.loiNhuanGop, base: k => k.doanhThuThuan, note: "NMV − Giá vốn" },
   ];
+
+  function fmtOrders(n) {
+    return `${(n || 0).toLocaleString("vi-VN")} đơn hàng`;
+  }
 
   function renderKPIs(kpis) {
     dash.lastKpis = kpis;
@@ -939,6 +947,7 @@
       const value = card.value(kpis);
       el(card.valueId).textContent = fmtNumber(value);
       if (card.pctId) el(card.pctId).textContent = fmtPercentOfBase(value, card.base(kpis));
+      if (card.ordersId) el(card.ordersId).textContent = fmtOrders(card.orders(kpis));
     });
     el("kpiDoanhSoSub").textContent = `${kpis.rowCount.toLocaleString("vi-VN")} dòng dữ liệu`;
   }
@@ -1267,10 +1276,11 @@
       const kpiRows = KPI_CARDS.map(card => {
         const value = card.value(kpis);
         const pct = card.pctId ? fmtPercentOfBase(value, card.base(kpis)) : "";
+        const orders = card.ordersId ? card.orders(kpis) : "";
         const note = card.valueId === "kpiDoanhSo"
           ? `${kpis.rowCount.toLocaleString("vi-VN")} dòng dữ liệu`
           : (card.note || "");
-        return [card.label, value, pct, note];
+        return [card.label, value, pct, orders, note];
       });
 
       const sheetRows = [
@@ -1278,12 +1288,12 @@
         ...filterRows,
         [],
         ["CHỈ SỐ TỔNG QUAN"],
-        ["Chỉ số", "Giá trị (VNĐ)", "Tỉ lệ", "Ghi chú"],
+        ["Chỉ số", "Giá trị (VNĐ)", "Tỉ lệ", "Số đơn hàng", "Ghi chú"],
         ...kpiRows,
       ];
 
       const ws = XLSX.utils.aoa_to_sheet(sheetRows);
-      ws["!cols"] = [{ wch: 26 }, { wch: 18 }, { wch: 10 }, { wch: 45 }];
+      ws["!cols"] = [{ wch: 26 }, { wch: 18 }, { wch: 10 }, { wch: 14 }, { wch: 45 }];
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Tổng quan");
       XLSX.writeFile(wb, `tong-quan-${new Date().toISOString().slice(0, 10)}.xlsx`);

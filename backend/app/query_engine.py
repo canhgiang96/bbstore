@@ -62,6 +62,8 @@ EMPTY_SUMMARY = {
         "doanhSo": 0, "gmv": 0, "huyChuaXK": 0, "huySauXK": 0, "hoan": 0,
         "discount": 0, "voucher": 0, "platformFee": 0, "piship": 0, "phiAff": 0,
         "doanhThuThuan": 0, "nmv": 0, "giaVon": 0, "loiNhuanGop": 0, "rowCount": 0,
+        "doanhSoOrders": 0, "huyChuaXKOrders": 0, "huySauXKOrders": 0, "hoanOrders": 0,
+        "gmvOrders": 0, "doanhThuThuanOrders": 0, "nmvOrders": 0, "pishipOrders": 0, "phiAffOrders": 0,
     },
     "timeline": [],
     "topProducts": [],
@@ -488,6 +490,13 @@ def run_summary_query(
             combo_source, cashflow_source, master_source, channel_source,
         )
 
+        # *_orders columns are COUNT(DISTINCT "orderId") over exactly the
+        # same row set each KPI's own SUM/CASE above draws from, so "how
+        # many orders make up this number" always matches what's actually
+        # summed — not just COUNT(*) (a row is one SKU line, not one
+        # order). NMV nets out platformFee/piship/phiAff, which (like
+        # their SUMs above) aren't status-scoped, so nmv_orders is the
+        # union of GMV-status orders and any order with a non-zero fee.
         totals_sql = f"""
             SELECT
               COALESCE(SUM("doanhSo"), 0) AS total,
@@ -501,13 +510,24 @@ def run_summary_query(
               COALESCE(SUM("piship"), 0) AS piship,
               COALESCE(SUM("phiAff"), 0) AS phi_aff,
               COALESCE(SUM(CASE WHEN "trangThai" IN {GMV_STATUSES_SQL} THEN "giaVon" ELSE 0 END), 0) AS gia_von,
-              COUNT(*) AS row_count
+              COUNT(*) AS row_count,
+              COUNT(DISTINCT "orderId") AS doanh_so_orders,
+              COUNT(DISTINCT CASE WHEN "trangThai" IN {GMV_STATUSES_SQL} THEN "orderId" END) AS gmv_orders,
+              COUNT(DISTINCT CASE WHEN "trangThai" = 'Hủy chưa XK' THEN "orderId" END) AS huy_chua_xk_orders,
+              COUNT(DISTINCT CASE WHEN "trangThai" = 'Hủy sau XK' THEN "orderId" END) AS huy_sau_xk_orders,
+              COUNT(DISTINCT CASE WHEN "returnedQty" > 0 THEN "orderId" END) AS hoan_orders,
+              COUNT(DISTINCT CASE WHEN "trangThai" IN {GMV_STATUSES_SQL}
+                OR "platformFee" != 0 OR "piship" != 0 OR "phiAff" != 0 THEN "orderId" END) AS nmv_orders,
+              COUNT(DISTINCT CASE WHEN "piship" != 0 THEN "orderId" END) AS piship_orders,
+              COUNT(DISTINCT CASE WHEN "phiAff" != 0 THEN "orderId" END) AS phi_aff_orders
             FROM orders_working
             WHERE {where_sql}
         """
         (
             total, gmv, huy_chua_xk, huy_sau_xk, hoan, discount, voucher,
             platform_fee, piship, phi_aff, gia_von, row_count,
+            doanh_so_orders, gmv_orders, huy_chua_xk_orders, huy_sau_xk_orders, hoan_orders,
+            nmv_orders, piship_orders, phi_aff_orders,
         ) = con.execute(totals_sql, params).fetchone()
         doanh_thu_thuan = gmv - discount - voucher
         nmv = doanh_thu_thuan - platform_fee - piship - phi_aff
@@ -568,6 +588,15 @@ def run_summary_query(
                 "giaVon": gia_von,
                 "loiNhuanGop": loi_nhuan_gop,
                 "rowCount": row_count,
+                "doanhSoOrders": doanh_so_orders,
+                "huyChuaXKOrders": huy_chua_xk_orders,
+                "huySauXKOrders": huy_sau_xk_orders,
+                "hoanOrders": hoan_orders,
+                "gmvOrders": gmv_orders,
+                "doanhThuThuanOrders": gmv_orders,  # same row scope as GMV
+                "nmvOrders": nmv_orders,
+                "pishipOrders": piship_orders,
+                "phiAffOrders": phi_aff_orders,
             },
             "timeline": [{"month": m, "value": v} for m, v in timeline],
             "topProducts": [{"label": l, "value": v} for l, v in top_products],
