@@ -935,6 +935,14 @@
     el("kpiPishipPct").textContent = fmtPercentOfBase(kpis.piship, kpis.doanhThuThuan);
     el("kpiPhiAffPct").textContent = fmtPercentOfBase(kpis.phiAff, kpis.doanhThuThuan);
     el("kpiGiaVonPct").textContent = fmtPercentOfBase(kpis.giaVon, kpis.nmv);
+
+    // Cross-row funnel ratios — each row's own "base" (first) card also
+    // shows its ratio against the PREVIOUS row's base: GMV/Doanh số,
+    // Doanh thu thuần/GMV, NMV/Doanh thu thuần, Lợi nhuận gộp/Doanh thu thuần.
+    el("kpiDoanhSoThuanPct").textContent = fmtPercentOfBase(kpis.gmv, kpis.doanhSo);
+    el("kpiDoanhThuThuanPct").textContent = fmtPercentOfBase(kpis.doanhThuThuan, kpis.gmv);
+    el("kpiNmvPct").textContent = fmtPercentOfBase(kpis.nmv, kpis.doanhThuThuan);
+    el("kpiLoiNhuanGopPct").textContent = fmtPercentOfBase(kpis.loiNhuanGop, kpis.doanhThuThuan);
   }
 
   /* ---- Detail table ---- */
