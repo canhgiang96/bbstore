@@ -243,6 +243,79 @@ def test_platform_fee_prorated_and_piship_assigned_to_first_line_only():
     assert single["piship"] == 1620
 
 
+def test_piship_assigned_per_row_when_orderid_not_mapped():
+    # Regression: when "Mã đơn hàng" isn't mapped, order_key used to be
+    # None for every row, and a single shared seen_order_ids set treated
+    # every row after the very first as "already seen" (since None was
+    # added to the set on row 1) — collapsing Phí Piship to a single 1.620
+    # for the entire file instead of 1.620 per row/order.
+    override = {
+        "date": "Ngày đặt hàng",
+        "price": "Giá gốc",
+        "quantity": "Số lượng",
+        "originalPrice": "Giá gốc",
+        "returnedQty": "Số lượng sản phẩm được hoàn trả",
+        "status": "Trạng Thái Đơn Hàng",
+        "cancelReason": "Lý do hủy",
+        "skuVariant": "SKU phân loại hàng",
+        "product": "Tên sản phẩm",
+        # "orderId" deliberately omitted.
+    }
+    parquet_bytes, row_count, mapping = excel_to_parquet(make_xlsx_bytes(), mapping_override=override)
+    assert "orderId" not in mapping
+    df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
+    assert row_count == 6
+    assert (df["piship"] == 1620).all()
+
+
+def test_voucher_and_platform_fee_fall_back_to_quantity_share_when_buyerpaidamount_not_mapped():
+    # Regression: when "Số tiền người mua thanh toán" isn't mapped,
+    # order_paid_ratio used to always be 0.0 (dividing by a total that's
+    # never populated), silently zeroing Voucher and Phí sàn for the whole
+    # report even though the source columns had real values. It should
+    # instead fall back to prorating by each line's share of the order's
+    # total quantity.
+    override = {
+        "date": "Ngày đặt hàng",
+        "orderId": "Mã đơn hàng",
+        "price": "Giá gốc",
+        "quantity": "Số lượng",
+        "originalPrice": "Giá gốc",
+        "returnedQty": "Số lượng sản phẩm được hoàn trả",
+        "status": "Trạng Thái Đơn Hàng",
+        "cancelReason": "Lý do hủy",
+        "skuVariant": "SKU phân loại hàng",
+        "product": "Tên sản phẩm",
+        "sellerSubsidy": "Người bán trợ giá",
+        "shopVoucher": "Mã giảm giá của Shop",
+        "fixedFee": "Phí cố định",
+        "serviceFee": "Phí dịch vụ",
+        "transactionFee": "Phí xử lý giao dịch",
+        # "buyerPaidAmount" deliberately omitted.
+    }
+    parquet_bytes, row_count, mapping = excel_to_parquet(make_fee_xlsx_bytes(), mapping_override=override)
+    assert "buyerPaidAmount" not in mapping
+    df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
+
+    line1 = df[(df["orderId"] == "F1") & (df["skuVariant"] == "A100-1")].iloc[0]  # quantity 2
+    line2 = df[(df["orderId"] == "F1") & (df["skuVariant"] == "B200-1")].iloc[0]  # quantity 1
+    single = df[df["orderId"] == "F2"].iloc[0]  # quantity 1, only line in its order
+
+    # F1's 2 lines split 2:1 by quantity (order total quantity = 3) instead
+    # of collapsing to 0.
+    assert line1["orderPaidRatio"] == 2 / 3
+    assert line2["orderPaidRatio"] == 1 / 3
+    assert line1["platformFee"] == 3500 * (2 / 3)
+    assert line2["platformFee"] == 3500 * (1 / 3)
+    assert line1["voucher"] == 10000 * (2 / 3)
+    assert line2["voucher"] == 10000 * (1 / 3)
+
+    # A single-line order still gets ratio 1.0 either way.
+    assert single["orderPaidRatio"] == 1.0
+    assert single["platformFee"] == 1000
+    assert single["voucher"] == 5000
+
+
 def test_platform_fee_and_piship_default_to_zero_when_columns_absent():
     parquet_bytes, row_count, mapping = excel_to_parquet(make_xlsx_bytes())
     assert "fixedFee" not in mapping

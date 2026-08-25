@@ -89,6 +89,30 @@ def test_six_row_kpi_reconciliation():
     assert gmv + huy_chua_xk + huy_sau_xk + hoan == total
 
 
+def test_hoan_hang_requires_a_real_zero_not_an_unmapped_quantity():
+    # Regression: so_luong_thuc == 0 used to trigger "Hoàn hàng" even when
+    # it's 0 only because "Số lượng" wasn't mapped at all (quantity
+    # defaults to 0 for every row) — misclassifying an entire report as
+    # fully-returned and zeroing GMV report-wide. A genuine full return
+    # (quantity_known=True) still correctly wins over "Hoàn thành".
+    assert derive_order_status("Hoàn thành", "", 0, 0, quantity_known=False) == "Hoàn thành"
+    assert derive_order_status("Đang giao hàng", "", 0, 0, quantity_known=False) == "Đang giao"
+    assert derive_order_status("Hoàn thành", "", 0, 4, quantity_known=True) == "Hoàn hàng"
+
+
+def test_derive_row_fields_unmapped_quantity_does_not_force_full_return():
+    mapping_no_quantity = {k: v for k, v in MAPPING.items() if k != "quantity"}
+    row_no_quantity = {
+        "Giá gốc": 100000,
+        "Số lượng sản phẩm được hoàn trả": 0,
+        "Trạng Thái Đơn Hàng": "Hoàn thành",
+        "Lý do hủy": "",
+        "SKU phân loại hàng": "A100-1",
+    }
+    fields = derive_row_fields(row_no_quantity, mapping_no_quantity)
+    assert fields["trangThai"] == "Hoàn thành"
+
+
 def test_sku_parent_strips_variant_suffix():
     fields = derive_row_fields(row(1, 1000, 0, "Hoàn thành"), MAPPING)
     assert fields["skuVariant"] == "A100-1"

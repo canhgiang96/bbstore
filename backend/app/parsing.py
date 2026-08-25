@@ -27,7 +27,12 @@ def to_number(v) -> float:
     if v is None or v == "":
         return 0.0
     s = re.sub(r"[^\d.,-]", "", str(v))
-    s = re.sub(r"\.(?=\d{3}(\D|$))", "", s)
+    # A lone "0.xyz" (e.g. a Combo ratio like 0.125) is never a
+    # thousands-grouped integer with a superfluous leading zero — nobody
+    # writes "0.500" to mean 500 — so leave it alone. Otherwise "." followed
+    # by exactly 3 digits (a full grouping) is a thousands separator to strip.
+    if not re.match(r"^-?0\.\d+$", s):
+        s = re.sub(r"\.(?=\d{3}(\D|$))", "", s)
     s = s.replace(",", ".")
     try:
         return float(s)
@@ -71,7 +76,11 @@ def parse_date_value(v):
                 return None
 
         try:
-            return dateutil_parser.parse(s)
+            # dayfirst=True matches the Vietnamese day-first convention
+            # (same as _DMY_RE above) for anything that didn't match the
+            # strict D/M/YYYY or YYYY/M/D regexes — e.g. dot-separated
+            # dates ("05.06.2024") or a 2-digit year ("05/06/24").
+            return dateutil_parser.parse(s, dayfirst=True)
         except (ValueError, OverflowError, TypeError):
             return None
     return None

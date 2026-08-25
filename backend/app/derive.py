@@ -11,13 +11,22 @@ from .mapping import strip_diacritics
 from .parsing import to_number
 
 
-def derive_order_status(raw_status: str, cancel_reason: str, so_luong_thuc: float, returned_qty: float) -> str:
+def derive_order_status(
+    raw_status: str, cancel_reason: str, so_luong_thuc: float, returned_qty: float,
+    quantity_known: bool = True,
+) -> str:
     status_norm = strip_diacritics(raw_status or "")
     reason_norm = strip_diacritics(cancel_reason or "")
 
     if "huy" in status_norm:
         return "Hủy sau XK" if "giao hang that bai" in reason_norm else "Hủy chưa XK"
-    if so_luong_thuc == 0:
+    # so_luong_thuc == 0 means "fully returned" only when we actually know
+    # the quantity — if "Số lượng" wasn't mapped at all, quantity defaults
+    # to 0 and so_luong_thuc is 0 for every row regardless of what really
+    # happened, which would otherwise misclassify the whole report as
+    # "Hoàn hàng" (zeroing GMV dashboard-wide) instead of falling through
+    # to the status-text-based branches below.
+    if quantity_known and so_luong_thuc == 0:
         return "Hoàn hàng"
     if returned_qty > 0 and so_luong_thuc > 0:
         return "Hoàn 1 phần"
@@ -43,7 +52,8 @@ def derive_row_fields(row: dict, mapping: dict) -> dict:
     sku_variant = str(get("skuVariant", "") or "").strip()
     sku = sku_variant.split("-")[0] if sku_variant else ""
 
-    quantity = to_number(get("quantity")) if mapping.get("quantity") else 0.0
+    quantity_known = bool(mapping.get("quantity"))
+    quantity = to_number(get("quantity")) if quantity_known else 0.0
     original_price = to_number(get("originalPrice")) if mapping.get("originalPrice") else 0.0
     returned_qty = to_number(get("returnedQty")) if mapping.get("returnedQty") else 0.0
     so_luong_thuc = quantity - returned_qty
@@ -51,7 +61,7 @@ def derive_row_fields(row: dict, mapping: dict) -> dict:
 
     status = str(get("status", "") or "").strip()
     cancel_reason = str(get("cancelReason", "") or "").strip()
-    trang_thai = derive_order_status(status, cancel_reason, so_luong_thuc, returned_qty)
+    trang_thai = derive_order_status(status, cancel_reason, so_luong_thuc, returned_qty, quantity_known=quantity_known)
 
     return {
         "skuVariant": sku_variant,
