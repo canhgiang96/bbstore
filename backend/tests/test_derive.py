@@ -59,6 +59,19 @@ def test_dang_giao_fallback():
     assert derive_order_status("Đang giao hàng", "", 2, 0) == "Đang giao"
 
 
+def test_tiktok_status_and_cancel_reason_phrasing():
+    # TikTok Shop's Vietnamese status/reason values differ slightly from
+    # Shopee's for the same two states — confirmed against a real TikTok
+    # order export (2026-08-26): "Đã hoàn tất" instead of "Hoàn thành",
+    # and "Giao gói hàng thất bại" instead of "Giao hàng thất bại".
+    assert derive_order_status("Đã hoàn tất", "", 1, 0) == "Hoàn thành"
+    assert derive_order_status("Đã hủy", "Giao gói hàng thất bại", 2, 0) == "Hủy sau XK"
+    # Still correctly falls through to Hoàn hàng/Hoàn 1 phần by quantity,
+    # same as Shopee — TikTok's "Đã hoàn tất" doesn't override a real return.
+    assert derive_order_status("Đã hoàn tất", "", 0, 4) == "Hoàn hàng"
+    assert derive_order_status("Đã hoàn tất", "", 3, 2) == "Hoàn 1 phần"
+
+
 def test_six_row_kpi_reconciliation():
     rows = [
         row(2, 100000, 0, "Đã hủy", "Giao hàng thất bại"),   # Hủy sau XK: 200.000

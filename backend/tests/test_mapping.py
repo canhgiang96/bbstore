@@ -73,3 +73,49 @@ def test_required_date_field_always_wins_on_exact_match():
     headers = ["Ngày đặt hàng", "Ngày giao hàng dự kiến", "Ngày gửi hàng"]
     m = detect_mapping(headers)
     assert m["date"] == "Ngày đặt hàng"
+
+
+# Captured verbatim from a real TikTok Shop order export (2026-08-26) — the
+# same field keys as Shopee's REAL_ORDER_HEADERS above, but with TikTok's
+# English column names instead of Shopee's Vietnamese ones.
+TIKTOK_ORDER_HEADERS = [
+    "Order ID", "Order Status", "Order Substatus", "Cancelation/Return Type",
+    "Normal or Pre-order", "SKU ID", "Seller SKU", "Product Name", "Variation",
+    "Quantity", "Sku Quantity of return", "SKU Unit Original Price",
+    "SKU Subtotal Before Discount", "SKU Platform Discount", "SKU Seller Discount",
+    "SKU Subtotal After Discount", "Shipping Fee After Discount",
+    "Original Shipping Fee", "Shipping Fee Seller Discount",
+    "Shipping Fee Platform Discount", "Payment platform discount", "Taxes",
+    "Order Amount", "Order Refund Amount", "Created Time", "Paid Time",
+    "RTS Time", "Shipped Time", "Delivered Time", "Cancelled Time", "Cancel By",
+    "Cancel Reason", "Fulfillment Type", "Warehouse Name", "Tracking ID",
+    "Delivery Option", "Shipping Provider Name", "Buyer Message",
+    "Buyer Username", "Recipient", "Phone #", "Country", "Province", "District",
+    "Commune", "Detail Address", "Additional address information",
+    "Payment Method", "Weight(kg)", "Product Category", "Package ID",
+    "Seller Note", "Checked Status", "Checked Marked by", "Order Channel",
+    "Creator Handle",
+]
+
+
+def test_tiktok_order_file_mapping():
+    m = detect_mapping(TIKTOK_ORDER_HEADERS)
+    assert m["date"] == "Created Time"
+    assert m["status"] == "Order Status"
+    assert m["orderId"] == "Order ID"
+    assert m["quantity"] == "Quantity"
+    assert m["cancelReason"] == "Cancel Reason"
+    assert m["returnedQty"] == "Sku Quantity of return"
+    assert m["originalPrice"] == "SKU Unit Original Price"
+    assert m["skuVariant"] == "Seller SKU"
+    assert m["sellerSubsidy"] == "SKU Seller Discount"
+    assert m["product"] == "Product Name"
+    assert m["category"] == "Product Category"
+    # TikTok's Orders file has no Voucher/Phí sàn/Phí AFF/Piship-equivalent
+    # columns (per the user, those come from the Dòng tiền-equivalent file
+    # instead) — must stay unmapped rather than false-matching something.
+    assert "shopVoucher" not in m
+    assert "buyerPaidAmount" not in m
+    assert "fixedFee" not in m
+    assert "serviceFee" not in m
+    assert "transactionFee" not in m

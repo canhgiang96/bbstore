@@ -125,19 +125,49 @@ hơn:**
 
 ---
 
+## 10. Hỗ trợ file Đơn hàng kênh TikTok Shop
+
+- Trước đây `app/mapping.py`/`app/excel_to_parquet.py` chỉ nhận diện được
+  cấu trúc cột tiếng Việt của Shopee. Đã bổ sung nhận diện cột tiếng Anh
+  của TikTok Shop vào **cùng** danh sách từ khóa hiện có (không cần kiến
+  trúc "theo kênh" riêng, vì tiếng Việt và tiếng Anh không trùng từ khóa
+  nên không có rủi ro xung đột giữa các kênh).
+- Mapping cột cho TikTok (đã xác nhận với user, dựa trên file export thật
+  ngày 2026-08-26): `Order ID`→Mã đơn hàng, `Created Time`→Ngày,
+  `Order Status`→Trạng thái, `Cancel Reason`→Lý do hủy,
+  `Seller SKU`→SKU phân loại hàng, `Quantity`→Số lượng,
+  `SKU Unit Original Price`→Giá gốc, `Sku Quantity of return`→SL hoàn trả,
+  `SKU Seller Discount`→Người bán trợ giá (Giảm giá = SKU Seller Discount /
+  Số lượng). File Đơn hàng TikTok **không có** Voucher/Phí sàn/Phí
+  AFF/Piship — các khoản này sẽ đến từ file Dòng tiền tương ứng của TikTok
+  (chưa làm — xem mục "Việc còn để ngỏ").
+- **Giá trị trạng thái/lý do hủy của TikTok khác Shopee dù cùng tiếng
+  Việt**: TikTok dùng "Đã hoàn tất" (Shopee dùng "Hoàn thành") và "Giao
+  gói hàng thất bại" (Shopee dùng "Giao hàng thất bại" — thiếu chữ "gói").
+  Đã bổ sung nhận diện cả 2 cách viết trong `app/derive.py`.
+- **Bug sửa kèm theo (ảnh hưởng mọi kênh, không riêng TikTok)**: file
+  TikTok test thực tế lộ ra lỗi đọc Excel — một số công cụ xuất file tạo
+  ra 1 thẻ `<row>` XML riêng cho **mỗi ô** thay vì mỗi dòng thực, khiến chế
+  độ đọc nhanh (`read_only=True`, thêm ở mục 8) âm thầm cắt file 56 cột
+  xuống còn 1 cột mà không báo lỗi gì. `read_excel_rows` giờ tự phát hiện
+  kết quả bất thường (≤1 cột) và đọc lại ở chế độ đầy đủ.
+- File chính: `app/mapping.py` (`KEYWORDS`), `app/derive.py`
+  (`derive_order_status`), `app/excel_to_parquet.py` (`read_excel_rows`).
+
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 
-- **Đa kênh với cấu trúc file khác nhau**: hiện tại toàn bộ logic đọc/tính
-  toán (`app/mapping.py`, `app/excel_to_parquet.py`) đang được viết cứng
-  theo cấu trúc file Excel của **Shopee**. Các kênh khác (Lazada, TikTok
-  Shop...) sẽ có cấu trúc cột khác — cần cung cấp mẫu file/mô tả cột cụ thể
-  của từng kênh trước khi thiết kế cơ chế nhận diện mapping theo kênh.
+- **File Dòng tiền của TikTok Shop**: Phí sàn/Phí AFF/Piship của TikTok sẽ
+  đến từ file Dòng tiền riêng (giống cách Shopee's Cashflow Report cung
+  cấp Phí AFF qua query-time join) — chưa có mẫu file, cần user cung cấp
+  trước khi làm.
+- **Đa kênh khác (Lazada,...)**: áp dụng cách làm tương tự mục 10 khi có
+  mẫu file thật.
 
 ## Cache-busting frontend
 
 Mỗi lần sửa `frontend/js/app.js` hoặc `frontend/index.html`, nhớ tăng số
 `?v=N` ở 2 dòng `<script src="js/...">` cuối `index.html` — nếu không trình
-duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=27**.
+duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=32**.
 
 ## 9. Tối ưu hóa code (reuse/simplification/efficiency)
 

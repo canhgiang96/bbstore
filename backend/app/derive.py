@@ -19,7 +19,10 @@ def derive_order_status(
     reason_norm = strip_diacritics(cancel_reason or "")
 
     if "huy" in status_norm:
-        return "Hủy sau XK" if "giao hang that bai" in reason_norm else "Hủy chưa XK"
+        # "giao hang that bai" is Shopee's phrasing; "giao goi hang that
+        # bai" ("delivery of the package failed") is TikTok Shop's.
+        failed_delivery = "giao hang that bai" in reason_norm or "giao goi hang that bai" in reason_norm
+        return "Hủy sau XK" if failed_delivery else "Hủy chưa XK"
     # so_luong_thuc == 0 means "fully returned" only when we actually know
     # the quantity — if "Số lượng" wasn't mapped at all, quantity defaults
     # to 0 and so_luong_thuc is 0 for every row regardless of what really
@@ -30,7 +33,9 @@ def derive_order_status(
         return "Hoàn hàng"
     if returned_qty > 0 and so_luong_thuc > 0:
         return "Hoàn 1 phần"
-    if "hoan thanh" in status_norm:
+    # "hoan thanh" is Shopee's phrasing; "hoan tat" ("Đã hoàn tất") is
+    # TikTok Shop's for the same "completed" status.
+    if "hoan thanh" in status_norm or "hoan tat" in status_norm:
         return "Hoàn thành"
     return "Đang giao"
 
