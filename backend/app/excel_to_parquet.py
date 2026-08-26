@@ -32,18 +32,38 @@ def read_excel_rows(file_like, sheet_name=0) -> tuple[list[dict], list[str]]:
     # openpyxl's default mode builds a full in-memory Cell/style object graph
     # for every cell, which dominates upload time on large sheets;
     # read_only=True switches it to a lazy row iterator instead (values
-    # only, no styles), several times faster and lighter on memory. Falls
-    # back to the plain auto-detected engine for non-.xlsx uploads (.xls,
-    # which openpyxl can't read at all) rather than failing the upload.
+    # only, no styles), several times faster and lighter on memory.
+    #
+    # That fast path trusts the sheet's <dimension> XML tag for its row/
+    # column bounds instead of scanning cells — some export tools (seen
+    # with a real TikTok Shop order export) write a stale/wrong dimension
+    # tag, which silently truncates every row down to just its first cell
+    # instead of raising anything. A well-formed order export always has
+    # more than one column, so a <=1-column result is the signal to retry
+    # without that shortcut (still much rarer than the fast path, so this
+    # doesn't cost anything for the common well-formed case).
     try:
         df = pd.read_excel(
             file_like, sheet_name=sheet_name, keep_default_na=False, dtype=object,
             engine="openpyxl", engine_kwargs={"read_only": True, "data_only": True},
         )
+        if df.shape[1] <= 1:
+            raise ValueError("read_only result looks truncated (<=1 column)")
     except Exception:
         if hasattr(file_like, "seek"):
             file_like.seek(0)
-        df = pd.read_excel(file_like, sheet_name=sheet_name, keep_default_na=False, dtype=object)
+        try:
+            df = pd.read_excel(
+                file_like, sheet_name=sheet_name, keep_default_na=False, dtype=object,
+                engine="openpyxl", engine_kwargs={"read_only": False, "data_only": True},
+            )
+        except Exception:
+            # Falls back to the plain auto-detected engine for non-.xlsx
+            # uploads (.xls, which openpyxl can't read at all) rather than
+            # failing the upload.
+            if hasattr(file_like, "seek"):
+                file_like.seek(0)
+            df = pd.read_excel(file_like, sheet_name=sheet_name, keep_default_na=False, dtype=object)
     headers = [str(c).strip() for c in df.columns]
     df.columns = headers
     rows = df.to_dict(orient="records")

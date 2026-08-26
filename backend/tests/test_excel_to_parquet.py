@@ -1,9 +1,11 @@
 import io
+import re
+import zipfile
 
 import pyarrow.parquet as pq
 from openpyxl import Workbook
 
-from app.excel_to_parquet import MappingError, excel_to_parquet, get_original_headers
+from app.excel_to_parquet import MappingError, excel_to_parquet, get_original_headers, read_excel_rows
 
 HEADERS = [
     "Mã đơn hàng", "Ngày đặt hàng", "Trạng Thái Đơn Hàng", "Lý do hủy",
@@ -85,6 +87,63 @@ def test_missing_date_column_raises():
 def test_get_original_headers():
     headers = get_original_headers(make_xlsx_bytes())
     assert headers == HEADERS
+
+
+def _make_one_row_tag_per_cell_xlsx_bytes():
+    """Builds an .xlsx whose worksheet XML has ONE <row> wrapper per
+    individual cell instead of one <row> per actual spreadsheet row (seen
+    verbatim in a real TikTok Shop order export). openpyxl's read_only
+    mode streams by <row> element and ends up keeping just a single
+    column's worth of cells per real row instead of raising anything —
+    this reproduces that malformed structure from a normal openpyxl file.
+    """
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Order ID", "Order Status", "Quantity"])
+    ws.append(["O1", "Đã hủy", 2])
+    ws.append(["O2", "Hoàn thành", 1])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    malformed_sheet_data = (
+        "<sheetData>"
+        '<row r="1"><c r="A1" t="str"><v>Order ID</v></c></row>'
+        '<row r="1"><c r="B1" t="str"><v>Order Status</v></c></row>'
+        '<row r="1"><c r="C1" t="str"><v>Quantity</v></c></row>'
+        '<row r="2"><c r="A2" t="str"><v>O1</v></c></row>'
+        '<row r="2"><c r="B2" t="str"><v>Đã hủy</v></c></row>'
+        '<row r="2"><c r="C2" t="n"><v>2</v></c></row>'
+        '<row r="3"><c r="A3" t="str"><v>O2</v></c></row>'
+        '<row r="3"><c r="B3" t="str"><v>Hoàn thành</v></c></row>'
+        '<row r="3"><c r="C3" t="n"><v>1</v></c></row>'
+        "</sheetData>"
+    )
+    out = io.BytesIO()
+    with zipfile.ZipFile(buf) as zin, zipfile.ZipFile(out, "w") as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "xl/worksheets/sheet1.xml":
+                text = re.sub(r"<sheetData>.*</sheetData>", malformed_sheet_data, data.decode("utf-8"), flags=re.S)
+                data = text.encode("utf-8")
+            zout.writestr(item, data)
+    out.seek(0)
+    return out
+
+
+def test_read_excel_rows_recovers_from_one_row_tag_per_cell_export():
+    # Regression: a malformed export (one <row> XML wrapper per cell
+    # instead of per real row) made openpyxl's fast read_only mode
+    # silently collapse every row down to just its first column, with no
+    # exception raised — read_excel_rows must detect the suspiciously
+    # narrow (<=1 column) result and retry without that fast path.
+    rows, headers = read_excel_rows(_make_one_row_tag_per_cell_xlsx_bytes())
+    assert headers == ["Order ID", "Order Status", "Quantity"]
+    assert len(rows) == 2
+    assert rows[0]["Order ID"] == "O1"
+    assert rows[0]["Order Status"] == "Đã hủy"
+    assert rows[0]["Quantity"] == 2
+    assert rows[1]["Order ID"] == "O2"
 
 
 def test_mapping_override_reconverts_with_chosen_columns():
