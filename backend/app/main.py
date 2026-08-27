@@ -9,10 +9,12 @@ from fastapi.staticfiles import StaticFiles
 from . import db
 from .routers import (
     adjustments_reports,
+    aff_channel_reports,
     auth,
     cashflow_reports,
     combo_reports,
     dashboard,
+    inhouse_handles,
     master_reports,
     reports,
     sales_channels,
@@ -33,7 +35,9 @@ app.include_router(cashflow_reports.router)
 app.include_router(combo_reports.router)
 app.include_router(master_reports.router)
 app.include_router(adjustments_reports.router)
+app.include_router(aff_channel_reports.router)
 app.include_router(sales_channels.router)
+app.include_router(inhouse_handles.router)
 app.include_router(dashboard.router)
 app.include_router(dashboard.dashboard_router)
 

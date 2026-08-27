@@ -52,6 +52,16 @@ FIELDS = [
     Field("fixedFee", "Phí cố định"),
     Field("serviceFee", "Phí dịch vụ"),
     Field("transactionFee", "Phí xử lý giao dịch"),
+    # TikTok-only, optional — feed the Dashboard's "Kênh nhỏ" (LIVE/VIDEO/
+    # PSA/AFF) classification (see derive.classify_kenh_nho). skuId is
+    # TikTok's own internal numeric SKU id — NOT the same value space as
+    # skuVariant/Seller SKU above — it's the join key against the Kênh AFF
+    # Report (app/aff_channel_to_parquet.py), confirmed against real files
+    # 2026-08-27 (Seller SKU "V3609-2" vs SKU ID "1730315401307982614" for
+    # the same order line — only SKU ID matches the Kênh AFF export).
+    Field("skuId", "SKU ID"),
+    Field("creatorHandle", "Người sáng tạo (Handle)"),
+    Field("contentChannel", "Kênh nội dung"),
 ]
 
 KEYWORDS = {
@@ -79,6 +89,9 @@ KEYWORDS = {
     "fixedFee": ["phi co dinh"],
     "serviceFee": ["phi dich vu"],
     "transactionFee": ["phi xu ly giao dich"],
+    "skuId": ["sku id"],
+    "creatorHandle": ["creator handle"],
+    "contentChannel": ["order channel"],
 }
 
 IDENTIFIER_PREFIX = re.compile(r"^(sku|ma|id)\b")

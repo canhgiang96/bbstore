@@ -35,12 +35,13 @@ DETAIL_COLUMN_LABELS = {
     "platformFee": "Phí sàn", "piship": "Phí Piship", "phiAff": "Phí AFF",
     "phanLoaiKho": "Phân loại kho", "phanLoaiMuc": "Phân loại mục", "phanLoaiSp": "Phân loại sản phẩm",
     "giaVon": "Giá vốn", "gmv": "GMV", "doanhThuThuan": "Doanh thu thuần", "nmv": "NMV",
-    "loiNhuanGop": "Lợi nhuận gộp", "salesChannel": "Kênh bán hàng",
+    "loiNhuanGop": "Lợi nhuận gộp", "salesChannel": "Kênh bán hàng", "kenhNho": "Kênh nhỏ",
 }
 GROUP_BY_LABELS = {
     "sku": "SKU", "product": "Sản phẩm", "category": "Danh mục", "customer": "Khách hàng",
     "status": "Trạng thái", "warehouseType": "Phân loại kho", "itemGroup": "Phân loại mục",
     "productType": "Phân loại sản phẩm", "orderId": "Mã đơn hàng", "salesChannel": "Kênh bán hàng",
+    "kenhNho": "Kênh nhỏ",
 }
 GROUP_AGG_LABELS = {
     "rowCount": "Số dòng", "quantity": "Số lượng", "returnedQty": "SL hoàn trả",
@@ -143,6 +144,34 @@ async def _fetch_sales_channels() -> list:
         return []
 
 
+async def _all_ready_aff_channel_parquet_paths() -> list:
+    """Every ready Kênh AFF Report's Parquet — (orderId, skuId) pairs joined
+    into the Orders query at query time to classify "Kênh nhỏ" = AFF (see
+    query_engine._aff_channel_join). Same query-time rationale and
+    best-effort []-on-error fallback as Cashflow/Combo/Master File (the
+    aff_channel_reports table may not exist yet right after this ships,
+    before the Supabase migration).
+    """
+    try:
+        reports = await db.pg_select("aff_channel_reports", {"status": "eq.ready", "select": "id,parquet_key"})
+    except Exception:  # noqa: BLE001 — Kênh nhỏ classification is best-effort, never worth 500ing the whole Dashboard for
+        return []
+    return await _download_all([r for r in reports if r.get("parquet_key")])
+
+
+async def _fetch_inhouse_handles() -> list[str]:
+    """The admin-managed "ID Inhouse" list (Danh mục tab) — Creator Handles
+    that count as the shop's own main channel rather than an outside
+    creator, used by the "Kênh nhỏ" CASE expression's Order Channel branch.
+    Best-effort: the table may not exist yet right after this ships.
+    """
+    try:
+        rows = await db.pg_select("inhouse_creator_handles", {"select": "name"})
+    except Exception:  # noqa: BLE001 — Kênh nhỏ classification is best-effort, never worth 500ing the whole Dashboard for
+        return []
+    return [r["name"] for r in rows if r.get("name")]
+
+
 async def _orders_paths_and_channel_groups(reports: list) -> tuple[list, dict]:
     """Resolves every ready Orders Report's local Parquet path ONCE and
     groups them by assigned Sales Channel name from that same resolved list
@@ -161,19 +190,21 @@ async def _orders_paths_and_channel_groups(reports: list) -> tuple[list, dict]:
     return list(paths), groups
 
 
-async def _all_dashboard_sources(reports: list) -> tuple[list, list, list, list, dict]:
+async def _all_dashboard_sources(reports: list) -> tuple[list, list, list, list, dict, list, list]:
     """Fetches every supporting dataset needed by the Dashboard's query
     engine concurrently instead of one sequential await per dataset — each
     is an independent Supabase (+ R2 download) round trip, so awaiting them
     one at a time was pure added latency on every single Dashboard request.
     """
-    (paths, channel_paths), cashflow_paths, combo_paths, master_paths = await asyncio.gather(
+    (paths, channel_paths), cashflow_paths, combo_paths, master_paths, aff_paths, inhouse_handles = await asyncio.gather(
         _orders_paths_and_channel_groups(reports),
         _all_ready_cashflow_parquet_paths(),
         _all_ready_combo_parquet_paths(),
         _all_ready_master_parquet_paths(),
+        _all_ready_aff_channel_parquet_paths(),
+        _fetch_inhouse_handles(),
     )
-    return paths, cashflow_paths, combo_paths, master_paths, channel_paths
+    return paths, cashflow_paths, combo_paths, master_paths, channel_paths, aff_paths, inhouse_handles
 
 
 @dashboard_router.get("/summary", response_model=SummaryOut)
@@ -187,10 +218,13 @@ async def dashboard_summary(
     productType: list[str] = Query([]),
     sku: Optional[str] = None,
     salesChannel: list[str] = Query([]),
+    kenhNho: list[str] = Query([]),
     user: dict = Depends(get_current_user),
 ):
     reports = await _all_ready_reports()
-    paths, cashflow_paths, combo_paths, master_paths, channel_paths = await _all_dashboard_sources(reports)
+    paths, cashflow_paths, combo_paths, master_paths, channel_paths, aff_paths, inhouse_handles = (
+        await _all_dashboard_sources(reports)
+    )
     # DuckDB building/querying orders_working is sync and can take real time
     # over hundreds of thousands of rows — off the event loop so it doesn't
     # freeze every other concurrent request for the duration.
@@ -200,6 +234,7 @@ async def dashboard_summary(
         cashflow_source=cashflow_paths, combo_source=combo_paths, master_source=master_paths,
         warehouse_type=warehouseType, item_group=itemGroup, product_type=productType, sku=sku,
         channel_source=channel_paths, sales_channel=salesChannel,
+        kenh_nho=kenhNho, aff_source=aff_paths, inhouse_handles=inhouse_handles,
     )
 
 
@@ -234,11 +269,14 @@ async def dashboard_rows(
     pathBy: list[str] = Query([]),
     pathValue: list[str] = Query([]),
     salesChannel: list[str] = Query([]),
+    kenhNho: list[str] = Query([]),
     user: dict = Depends(get_current_user),
 ):
     path_filters = _zip_path_filters(pathBy, pathValue)
     reports = await _all_ready_reports()
-    paths, cashflow_paths, combo_paths, master_paths, channel_paths = await _all_dashboard_sources(reports)
+    paths, cashflow_paths, combo_paths, master_paths, channel_paths, aff_paths, inhouse_handles = (
+        await _all_dashboard_sources(reports)
+    )
     return await run_in_threadpool(
         run_rows_query, paths,
         from_date=from_, to_date=to, category=category, status=status,
@@ -246,6 +284,7 @@ async def dashboard_rows(
         cashflow_source=cashflow_paths, combo_source=combo_paths, master_source=master_paths,
         warehouse_type=warehouseType, item_group=itemGroup, product_type=productType, sku=sku,
         path_filters=path_filters, channel_source=channel_paths, sales_channel=salesChannel,
+        kenh_nho=kenhNho, aff_source=aff_paths, inhouse_handles=inhouse_handles,
     )
 
 
@@ -268,13 +307,16 @@ async def dashboard_rows_grouped(
     pathBy: list[str] = Query([]),
     pathValue: list[str] = Query([]),
     salesChannel: list[str] = Query([]),
+    kenhNho: list[str] = Query([]),
     user: dict = Depends(get_current_user),
 ):
     if groupBy not in GROUP_BY_COLUMNS:
         raise HTTPException(status_code=400, detail=f"groupBy không hợp lệ: {groupBy}")
     path_filters = _zip_path_filters(pathBy, pathValue)
     reports = await _all_ready_reports()
-    paths, cashflow_paths, combo_paths, master_paths, channel_paths = await _all_dashboard_sources(reports)
+    paths, cashflow_paths, combo_paths, master_paths, channel_paths, aff_paths, inhouse_handles = (
+        await _all_dashboard_sources(reports)
+    )
     return await run_in_threadpool(
         run_grouped_rows_query, paths,
         from_date=from_, to_date=to, category=category, status=status,
@@ -282,6 +324,7 @@ async def dashboard_rows_grouped(
         cashflow_source=cashflow_paths, combo_source=combo_paths, master_source=master_paths,
         warehouse_type=warehouseType, item_group=itemGroup, product_type=productType, sku=sku,
         path_filters=path_filters, channel_source=channel_paths, sales_channel=salesChannel,
+        kenh_nho=kenhNho, aff_source=aff_paths, inhouse_handles=inhouse_handles,
     )
 
 
@@ -301,6 +344,7 @@ async def dashboard_export(
     sort: Optional[str] = None,
     sortDir: str = "asc",
     salesChannel: list[str] = Query([]),
+    kenhNho: list[str] = Query([]),
     user: dict = Depends(get_current_user),
 ):
     """Exports every row/group matching the current Detail-table view (not
@@ -318,7 +362,9 @@ async def dashboard_export(
         raise HTTPException(status_code=400, detail="Không có cột hợp lệ để xuất.")
 
     reports = await _all_ready_reports()
-    paths, cashflow_paths, combo_paths, master_paths, channel_paths = await _all_dashboard_sources(reports)
+    paths, cashflow_paths, combo_paths, master_paths, channel_paths, aff_paths, inhouse_handles = (
+        await _all_dashboard_sources(reports)
+    )
     rows = await run_in_threadpool(
         run_export_query, paths,
         from_date=from_, to_date=to, category=category, status=status,
@@ -326,6 +372,7 @@ async def dashboard_export(
         cashflow_source=cashflow_paths, combo_source=combo_paths, master_source=master_paths,
         warehouse_type=warehouseType, item_group=itemGroup, product_type=productType, sku=sku,
         channel_source=channel_paths, sales_channel=salesChannel,
+        kenh_nho=kenhNho, aff_source=aff_paths, inhouse_handles=inhouse_handles,
     )
 
     labels = {**GROUP_AGG_LABELS, "groupValue": GROUP_BY_LABELS.get(groupBy, "Nhóm")} if groupBy else DETAIL_COLUMN_LABELS

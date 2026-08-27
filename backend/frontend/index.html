@@ -175,6 +175,13 @@
           </details>
         </div>
         <div class="filter-item filter-grow">
+          <label>Kênh nhỏ</label>
+          <details class="multi-select">
+            <summary class="multi-select-summary" id="filterKenhNhoSummary">Tất cả</summary>
+            <div class="multi-select-list" id="filterKenhNhoList"></div>
+          </details>
+        </div>
+        <div class="filter-item filter-grow">
           <label>SKU</label>
           <input type="text" id="filterSku" placeholder="Tìm theo SKU..." />
         </div>
@@ -350,6 +357,7 @@
         <option value="orders">Đơn hàng</option>
         <option value="cashflow">Dòng tiền</option>
         <option value="adjustments">Điều chỉnh doanh thu</option>
+        <option value="affchannel">Kênh AFF</option>
       </select>
     </div>
 
@@ -437,6 +445,30 @@
     </div>
   </section>
 
+  <!-- ============ KÊNH AFF (server-backed — supplies (orderId, skuId) pairs for the Orders Dashboard's "Kênh nhỏ" join) ============ -->
+  <section id="panel-affchannel" hidden>
+    <div class="data-panel-header">
+      <h2>Kênh AFF — Report</h2>
+    </div>
+
+    <div class="drop-zone" id="affChannelUploadDropzone">
+      <div class="drop-zone-icon">📁</div>
+      <h2>Kéo thả file Excel vào đây</h2>
+      <p>hoặc</p>
+      <label class="btn btn-primary" for="affChannelUploadInput">Chọn file (.xlsx, .xls, .csv)</label>
+      <input type="file" id="affChannelUploadInput" accept=".xlsx,.xls,.csv" hidden />
+      <div class="import-summary" id="affChannelUploadSummary"></div>
+    </div>
+
+    <div class="card table-card">
+      <div class="table-card-header">
+        <h3>Danh sách Report</h3>
+        <span class="muted" id="affChannelReportsListCount"></span>
+      </div>
+      <div id="affChannelReportsListBody"></div>
+    </div>
+  </section>
+
   </section><!-- /#panel-salesdata -->
 
   <!-- ============ DANH MỤC (merged: Master File / Combo / Kênh bán hàng) ============ -->
@@ -447,6 +479,7 @@
         <option value="master">Master File</option>
         <option value="combo">Combo</option>
         <option value="channels">Kênh bán hàng</option>
+        <option value="inhouse">ID Inhouse</option>
       </select>
     </div>
 
@@ -524,6 +557,32 @@
     </div>
   </section>
 
+  <!-- ============ ID INHOUSE — plain named list, not a file-upload Report; the shop's own TikTok Creator Handles for the Dashboard's "Kênh nhỏ" classification ============ -->
+  <section id="panel-inhouse" hidden>
+    <div class="data-panel-header">
+      <h2>ID Inhouse</h2>
+    </div>
+
+    <div class="card" id="inhouseAddCard">
+      <div class="detail-toolbar-controls">
+        <div class="filter-item filter-grow">
+          <label>Tên người sáng tạo (Handle)</label>
+          <input type="text" id="newInhouseHandle" placeholder="Ví dụ: bbstores.vn, bbcongso..." />
+        </div>
+        <button class="btn btn-primary" id="btnAddInhouseHandle" style="align-self:flex-end;">+ Thêm ID</button>
+      </div>
+      <div class="import-summary" id="inhouseAddSummary"></div>
+    </div>
+
+    <div class="card table-card">
+      <div class="table-card-header">
+        <h3>Danh sách ID Inhouse</h3>
+        <span class="muted" id="inhouseListCount"></span>
+      </div>
+      <div id="inhouseListBody"></div>
+    </div>
+  </section>
+
   </section><!-- /#panel-catalog -->
 
 </main>
@@ -534,7 +593,7 @@
 
 </div><!-- /#appShell -->
 
-<script src="js/api.js?v=34"></script>
-<script src="js/app.js?v=34"></script>
+<script src="js/api.js?v=35"></script>
+<script src="js/app.js?v=35"></script>
 </body>
 </html>

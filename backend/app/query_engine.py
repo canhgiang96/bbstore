@@ -24,7 +24,7 @@ DETAIL_COLUMNS = [
     "revenue", "doanhSo", "status", "trangThai", "discount", "voucher",
     "platformFee", "piship", "phiAff", "phanLoaiKho", "phanLoaiMuc",
     "phanLoaiSp", "giaVon", "gmv", "doanhThuThuan", "nmv", "loiNhuanGop",
-    "salesChannel",
+    "salesChannel", "kenhNho",
 ]
 
 ALLOWED_SORT_COLUMNS = {
@@ -42,7 +42,7 @@ GROUP_BY_COLUMNS = {
     "customer": "customer", "status": "trangThai",
     "warehouseType": "phanLoaiKho", "itemGroup": "phanLoaiMuc",
     "productType": "phanLoaiSp", "orderId": "orderId",
-    "salesChannel": "salesChannel",
+    "salesChannel": "salesChannel", "kenhNho": "kenhNho",
 }
 
 # Sortable aggregate columns for run_grouped_rows_query's result set — same
@@ -72,6 +72,7 @@ EMPTY_SUMMARY = {
     "facets": {
         "categories": [], "statuses": [],
         "warehouseTypes": [], "itemGroups": [], "productTypes": [], "salesChannels": [],
+        "kenhNho": [],
     },
 }
 
@@ -155,7 +156,7 @@ def _in_clause(column: str, values, params: list):
 def _where_clause(
     from_date=None, to_date=None, category=None, status=None,
     warehouse_type=None, item_group=None, product_type=None, sku=None,
-    sales_channel=None,
+    sales_channel=None, kenh_nho=None,
 ):
     clauses = []
     params: list = []
@@ -176,12 +177,13 @@ def _where_clause(
         params.append(category)
     # Each of these accepts either a single value or a list — the Detail-table
     # filter bar's "Trạng thái"/"Phân loại kho"/"Phân loại mục"/"Phân loại
-    # sản phẩm"/"Kênh bán hàng" pickers are multi-select, so a filter can now
-    # mean "any of these values" (SQL IN), not just one exact match.
+    # sản phẩm"/"Kênh bán hàng"/"Kênh nhỏ" pickers are multi-select, so a
+    # filter can now mean "any of these values" (SQL IN), not just one exact
+    # match.
     for column, values in [
         ("trangThai", status), ("phanLoaiKho", warehouse_type),
         ("phanLoaiMuc", item_group), ("phanLoaiSp", product_type),
-        ("salesChannel", sales_channel),
+        ("salesChannel", sales_channel), ("kenhNho", kenh_nho),
     ]:
         in_clause = _in_clause(column, values, params)
         if in_clause:
@@ -289,6 +291,50 @@ def _master_join(master_source, sku_variant_expr: str) -> tuple[str, list, str, 
     )
 
 
+def _aff_channel_join(
+    aff_source, inhouse_handles: list, sku_id_col: str, creator_handle_col: str
+) -> tuple[str, list, str, str]:
+    """Returns (join_sql, join_params, aff_matched_expr, is_inhouse_expr) —
+    the two building blocks _build_orders_working's "Kênh nhỏ" CASE
+    expression needs, both added as LEFT JOINs against "o" (never fan out
+    rows — the Kênh AFF Report is already DISTINCT-ed per (orderId, skuId)
+    at conversion time, see aff_channel_to_parquet.py, and the inhouse-
+    handles lookup is just a small list).
+
+    sku_id_col/creator_handle_col are the caller's already-resolved (via
+    `available`, same backward-compat pattern as discount_col etc.)
+    references to o."skuId"/o."creatorHandle" — passed in rather than
+    hardcoded here so a globally-absent column becomes a literal "NULL"
+    that safely never matches, instead of a DuckDB "column not found" error.
+
+    Both expressions are plain booleans with NO "?" placeholders of their
+    own — every param this function needs lives in join_sql instead — so
+    the caller can drop aff_matched_expr/is_inhouse_expr into the outer
+    SELECT list without worrying about param-position ordering relative to
+    the FROM clause's other joins.
+    """
+    join_sql = ""
+    join_params: list = []
+    aff_matched_expr = "FALSE"
+    if aff_source:
+        join_sql += (
+            'LEFT JOIN (SELECT DISTINCT "orderId" AS aff_order_id, "skuId" AS aff_sku_id '
+            'FROM read_parquet(?, union_by_name=true)) aff '
+            f'ON o."orderId" = aff.aff_order_id AND {sku_id_col} = aff.aff_sku_id '
+        )
+        join_params.append(aff_source)
+        aff_matched_expr = "aff.aff_order_id IS NOT NULL"
+    is_inhouse_expr = "FALSE"
+    if inhouse_handles:
+        join_sql += (
+            'LEFT JOIN (SELECT UNNEST(CAST(? AS VARCHAR[])) AS handle) ih '
+            f'ON LOWER(TRIM({creator_handle_col})) = ih.handle '
+        )
+        join_params.append([h.lower() for h in inhouse_handles])
+        is_inhouse_expr = "ih.handle IS NOT NULL"
+    return join_sql, join_params, aff_matched_expr, is_inhouse_expr
+
+
 def _channel_tagged_source_sql(parquet_source, channel_groups: dict | None) -> tuple[str, list]:
     """Returns (select_sql, params) for the base row source of
     orders_working, tagging every row with which Sales Channel its Orders
@@ -348,6 +394,7 @@ def _base_date_filter_sql(from_date, to_date) -> tuple[str, list]:
 
 def _build_orders_working(
     con, parquet_source, available: set, combo_source, cashflow_source, master_source,
+    aff_source=None, inhouse_handles=None,
     channel_source: dict | None = None, from_date=None, to_date=None,
 ) -> None:
     """Materializes a TEMP TABLE "orders_working" combining the Combo
@@ -366,6 +413,9 @@ def _build_orders_working(
     voucher_col = 'COALESCE("voucher", 0)' if "voucher" in available else "0"
     platform_fee_col = 'COALESCE("platformFee", 0)' if "platformFee" in available else "0"
     piship_col = 'COALESCE("piship", 0)' if "piship" in available else "0"
+    sku_id_col = 'o."skuId"' if "skuId" in available else "NULL"
+    creator_handle_col = 'o."creatorHandle"' if "creatorHandle" in available else "NULL"
+    content_channel_col = 'o."contentChannel"' if "contentChannel" in available else "NULL"
 
     combo_join_sql, combo_params, sku_variant_expr, ratio_expr, slot_expr = _combo_join(combo_source)
     cashflow_join_sql, cashflow_params, aff_expr, cashflow_platform_fee_expr = _cashflow_agg_join(
@@ -374,6 +424,25 @@ def _build_orders_working(
     master_join_sql, master_params, muc_expr, phan_loai_sp_expr, phan_loai_kho_expr, gia_von_expr = _master_join(
         master_source, sku_variant_expr
     )
+    aff_channel_join_sql, aff_channel_params, aff_matched_expr, is_inhouse_expr = _aff_channel_join(
+        aff_source, inhouse_handles or [], sku_id_col, creator_handle_col
+    )
+    # "Kênh nhỏ" — TikTok-only (LIVE/VIDEO/PSA/AFF), stays NULL for every
+    # other channel. Confirmed with the user 2026-08-27: a Kênh AFF match
+    # always wins (AFF) regardless of eligibility status; a blank/"0"
+    # Creator Handle is the main channel (PSA); an admin-managed "ID
+    # Inhouse" handle maps by Order Channel; anything else is an outside
+    # creator (AFF).
+    kenh_nho_expr = f"""CASE
+        WHEN LOWER(TRIM(o."salesChannel")) != 'tiktok' THEN NULL
+        WHEN {aff_matched_expr} THEN 'AFF'
+        WHEN {creator_handle_col} IS NULL OR TRIM({creator_handle_col}) IN ('', '0') THEN 'PSA'
+        WHEN {is_inhouse_expr} THEN CASE {content_channel_col}
+            WHEN 'Videos' THEN 'VIDEO' WHEN 'Product cards' THEN 'PSA' WHEN 'LIVE' THEN 'LIVE'
+            ELSE NULL
+        END
+        ELSE 'AFF'
+    END"""
     # Phí sàn can come from the Orders file itself (Shopee) and/or from a
     # Cashflow Report (TikTok) — see _cashflow_agg_join. Combined here so
     # every downstream use (the persisted "platformFee" column, nmv) stays
@@ -454,15 +523,20 @@ def _build_orders_working(
           {doanh_thu_thuan_row_expr} AS "doanhThuThuan",
           {nmv_row_expr} AS "nmv",
           {loi_nhuan_gop_row_expr} AS "loiNhuanGop",
-          o."salesChannel" AS "salesChannel"
+          o."salesChannel" AS "salesChannel",
+          {kenh_nho_expr} AS "kenhNho"
         FROM (SELECT * FROM ({channel_source_sql}) t {date_filter_sql}) o
         {combo_join_sql}
         {cashflow_join_sql}
         {master_join_sql}
+        {aff_channel_join_sql}
     """
     con.execute(
         create_sql,
-        [*channel_params, *date_filter_params, *combo_params, *cashflow_params, *master_params],
+        [
+            *channel_params, *date_filter_params, *combo_params, *cashflow_params, *master_params,
+            *aff_channel_params,
+        ],
     )
 
 
@@ -470,6 +544,7 @@ def _prepare_orders_working(
     con, parquet_source, from_date, to_date, category, status, warehouse_type,
     item_group, product_type, sku, sales_channel,
     combo_source, cashflow_source, master_source, channel_source,
+    kenh_nho=None, aff_source=None, inhouse_handles=None,
 ) -> tuple[str, list]:
     """Shared setup for every run_*_query function below: builds the WHERE
     clause for the requested filters and materializes orders_working on
@@ -478,11 +553,12 @@ def _prepare_orders_working(
     """
     where_sql, params = _where_clause(
         from_date, to_date, category, status, warehouse_type, item_group, product_type, sku,
-        sales_channel,
+        sales_channel, kenh_nho,
     )
     available = _available_columns(con, parquet_source)
     _build_orders_working(
-        con, parquet_source, available, combo_source, cashflow_source, master_source, channel_source,
+        con, parquet_source, available, combo_source, cashflow_source, master_source,
+        aff_source, inhouse_handles, channel_source,
         from_date=from_date, to_date=to_date,
     )
     return where_sql, params
@@ -493,6 +569,7 @@ def run_summary_query(
     cashflow_source=None, combo_source=None, master_source=None,
     warehouse_type=None, item_group=None, product_type=None, sku=None,
     channel_source=None, sales_channel=None,
+    kenh_nho=None, aff_source=None, inhouse_handles=None,
 ) -> dict:
     if _is_empty_source(parquet_source):
         return EMPTY_SUMMARY
@@ -503,6 +580,7 @@ def run_summary_query(
             con, parquet_source, from_date, to_date, category, status, warehouse_type,
             item_group, product_type, sku, sales_channel,
             combo_source, cashflow_source, master_source, channel_source,
+            kenh_nho, aff_source, inhouse_handles,
         )
 
         # *_orders columns are COUNT(DISTINCT "orderId") over exactly the
@@ -579,12 +657,13 @@ def run_summary_query(
               list(DISTINCT "phanLoaiKho") AS warehouse_types,
               list(DISTINCT "phanLoaiMuc") AS item_groups,
               list(DISTINCT "phanLoaiSp") AS product_types,
-              list(DISTINCT "salesChannel") AS sales_channels
+              list(DISTINCT "salesChannel") AS sales_channels,
+              list(DISTINCT "kenhNho") AS kenh_nho_values
             FROM orders_working
         """
-        categories, statuses, warehouse_types, item_groups, product_types, sales_channels = con.execute(
-            facets_sql
-        ).fetchone()
+        (
+            categories, statuses, warehouse_types, item_groups, product_types, sales_channels, kenh_nho_values,
+        ) = con.execute(facets_sql).fetchone()
 
         return {
             "kpis": {
@@ -624,6 +703,7 @@ def run_summary_query(
                 "itemGroups": sorted(g for g in (item_groups or []) if g),
                 "productTypes": sorted(p for p in (product_types or []) if p),
                 "salesChannels": sorted(s for s in (sales_channels or []) if s),
+                "kenhNho": sorted(k for k in (kenh_nho_values or []) if k),
             },
         }
     finally:
@@ -669,6 +749,7 @@ def run_rows_query(
     cashflow_source=None, combo_source=None, master_source=None,
     warehouse_type=None, item_group=None, product_type=None, sku=None,
     path_filters=None, channel_source=None, sales_channel=None,
+    kenh_nho=None, aff_source=None, inhouse_handles=None,
 ) -> dict:
     page = max(1, page)
     if _is_empty_source(parquet_source):
@@ -680,6 +761,7 @@ def run_rows_query(
             con, parquet_source, from_date, to_date, category, status, warehouse_type,
             item_group, product_type, sku, sales_channel,
             combo_source, cashflow_source, master_source, channel_source,
+            kenh_nho, aff_source, inhouse_handles,
         )
 
         # Drill-down request from a (possibly nested) group node in the
@@ -761,6 +843,7 @@ def run_grouped_rows_query(
     cashflow_source=None, combo_source=None, master_source=None,
     warehouse_type=None, item_group=None, product_type=None, sku=None,
     path_filters=None, channel_source=None, sales_channel=None,
+    kenh_nho=None, aff_source=None, inhouse_handles=None,
 ) -> dict:
     """Server-side group-by-column aggregation over orders_working — the
     "Group theo" mode of the Detail-table sub-tab. Never loads the raw row
@@ -785,6 +868,7 @@ def run_grouped_rows_query(
             con, parquet_source, from_date, to_date, category, status, warehouse_type,
             item_group, product_type, sku, sales_channel,
             combo_source, cashflow_source, master_source, channel_source,
+            kenh_nho, aff_source, inhouse_handles,
         )
         where_sql = _apply_path_filters(where_sql, params, path_filters)
         where_sql = _apply_search_filter(where_sql, params, search)
@@ -819,6 +903,7 @@ def run_export_query(
     cashflow_source=None, combo_source=None, master_source=None,
     warehouse_type=None, item_group=None, product_type=None, sku=None,
     channel_source=None, sales_channel=None,
+    kenh_nho=None, aff_source=None, inhouse_handles=None,
 ) -> list[dict]:
     """Pulls the ENTIRE result set matching the current filters (no LIMIT/
     OFFSET) for the Excel export — grouped aggregate rows when group_by is
@@ -834,6 +919,7 @@ def run_export_query(
             con, parquet_source, from_date, to_date, category, status, warehouse_type,
             item_group, product_type, sku, sales_channel,
             combo_source, cashflow_source, master_source, channel_source,
+            kenh_nho, aff_source, inhouse_handles,
         )
         where_sql = _apply_search_filter(where_sql, params, search)
 

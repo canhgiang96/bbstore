@@ -1059,3 +1059,112 @@ def test_grouped_rows_by_sales_channel(channel_tagged_reports):
     assert set(by_group) == {"Shopee", "Lazada", ""}
     assert by_group["Shopee"]["rowCount"] == 1
     assert by_group[""]["rowCount"] == 1  # the untagged Report
+
+
+# ---- "Kênh nhỏ" (LIVE/VIDEO/PSA/AFF) classification ----
+# Confirmed with the user 2026-08-27: TikTok-only; a Kênh AFF file match
+# always wins (AFF); a blank/"0" Creator Handle is the main channel (PSA);
+# an admin-managed "ID Inhouse" handle maps by Order Channel; any other
+# handle is an outside creator (AFF); every other sales channel stays NULL.
+
+def _kenh_nho_row(order_id: str, sku_id: str, creator_handle, content_channel) -> dict:
+    return {
+        "date": datetime(2026, 2, 1), "orderId": order_id, "sku": "X1",
+        "skuVariant": "X1-1", "product": "SP X", "category": "Áo", "customer": "(Không rõ)",
+        "quantity": 1.0, "returnedQty": 0.0, "soLuongThuc": 1.0, "price": 0.0, "originalPrice": 10000.0,
+        "revenue": 0.0, "doanhSo": 10000.0, "status": "Hoàn thành", "trangThai": "Hoàn thành",
+        "discount": 0.0, "voucher": 0.0, "skuId": sku_id,
+        "creatorHandle": creator_handle, "contentChannel": content_channel,
+    }
+
+
+@pytest.fixture
+def tiktok_kenh_nho_path():
+    rows = [
+        _kenh_nho_row("O1", "S1", "", ""),  # blank handle -> PSA
+        _kenh_nho_row("O2", "S2", "0", "Videos"),  # "0" handle -> PSA (Order Channel ignored)
+        _kenh_nho_row("O3", "S3", "bbstores.vn", "Videos"),  # inhouse -> VIDEO
+        _kenh_nho_row("O4", "S4", "bbstores.vn", "LIVE"),  # inhouse -> LIVE
+        _kenh_nho_row("O5", "S5", "BBCongSo", "Product cards"),  # inhouse, case-insensitive -> PSA
+        _kenh_nho_row("O6", "S6", "randomcreator123", "Videos"),  # outside creator -> AFF
+        _kenh_nho_row("O7", "S7", "bbstores.vn", "Videos"),  # matched in Kênh AFF file -> AFF wins over inhouse
+    ]
+    path = _write_raw_parquet(rows)
+    yield path
+    os.remove(path)
+
+
+@pytest.fixture
+def aff_channel_path():
+    path = _write_raw_parquet([{"orderId": "O7", "skuId": "S7"}])
+    yield path
+    os.remove(path)
+
+
+INHOUSE_HANDLES = ["bbstores.vn", "bbcongso", "bbstores_forlady"]
+
+
+def test_kenh_nho_classification_all_branches(tiktok_kenh_nho_path, aff_channel_path):
+    channel_source = {"TikTok": [tiktok_kenh_nho_path]}
+    result = run_rows_query(
+        [tiktok_kenh_nho_path], page_size=20, channel_source=channel_source,
+        aff_source=[aff_channel_path], inhouse_handles=INHOUSE_HANDLES,
+    )
+    by_order = {r["orderId"]: r["kenhNho"] for r in result["rows"]}
+    assert by_order == {
+        "O1": "PSA", "O2": "PSA", "O3": "VIDEO", "O4": "LIVE",
+        "O5": "PSA", "O6": "AFF", "O7": "AFF",
+    }
+
+
+def test_kenh_nho_stays_null_for_non_tiktok_channel(tiktok_kenh_nho_path, aff_channel_path):
+    channel_source = {"Shopee": [tiktok_kenh_nho_path]}
+    result = run_rows_query(
+        [tiktok_kenh_nho_path], page_size=20, channel_source=channel_source,
+        aff_source=[aff_channel_path], inhouse_handles=INHOUSE_HANDLES,
+    )
+    assert all(r["kenhNho"] is None for r in result["rows"])
+
+
+def test_kenh_nho_null_when_untagged_and_no_inhouse_or_aff_data(tiktok_kenh_nho_path):
+    # No channel_source at all -> salesChannel defaults to "" (not "tiktok"),
+    # so kenhNho stays NULL even though creatorHandle/contentChannel exist.
+    result = run_rows_query([tiktok_kenh_nho_path], page_size=20)
+    assert all(r["kenhNho"] is None for r in result["rows"])
+
+
+def test_kenh_nho_facet_lists_only_non_null_values(tiktok_kenh_nho_path, aff_channel_path):
+    channel_source = {"TikTok": [tiktok_kenh_nho_path]}
+    result = run_summary_query(
+        [tiktok_kenh_nho_path], channel_source=channel_source,
+        aff_source=[aff_channel_path], inhouse_handles=INHOUSE_HANDLES,
+    )
+    assert set(result["facets"]["kenhNho"]) == {"PSA", "VIDEO", "LIVE", "AFF"}
+
+
+def test_kenh_nho_filter_narrows_rows(tiktok_kenh_nho_path, aff_channel_path):
+    channel_source = {"TikTok": [tiktok_kenh_nho_path]}
+    result = run_rows_query(
+        [tiktok_kenh_nho_path], page_size=20, channel_source=channel_source,
+        aff_source=[aff_channel_path], inhouse_handles=INHOUSE_HANDLES, kenh_nho=["AFF"],
+    )
+    assert {r["orderId"] for r in result["rows"]} == {"O6", "O7"}
+
+
+def test_kenh_nho_old_schema_report_without_new_columns_defaults_to_psa_when_tiktok():
+    # A TikTok Report converted before skuId/creatorHandle/contentChannel
+    # existed: the columns are globally absent (not just NULL per-row) —
+    # must not error, and best-effort classifies as PSA (same as a real
+    # blank Creator Handle) rather than crashing the whole Dashboard.
+    rows = [{
+        "date": datetime(2026, 2, 1), "orderId": "OLD1", "sku": "X1",
+        "skuVariant": "X1-1", "product": "SP X", "category": "Áo", "customer": "(Không rõ)",
+        "quantity": 1.0, "returnedQty": 0.0, "soLuongThuc": 1.0, "price": 0.0, "originalPrice": 10000.0,
+        "revenue": 0.0, "doanhSo": 10000.0, "status": "Hoàn thành", "trangThai": "Hoàn thành",
+    }]
+    path = _write_raw_parquet(rows)
+    try:
+        result = run_rows_query([path], page_size=10, channel_source={"TikTok": [path]})
+        assert result["rows"][0]["kenhNho"] == "PSA"
+    finally:
+        os.remove(path)

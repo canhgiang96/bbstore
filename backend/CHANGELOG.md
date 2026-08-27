@@ -219,26 +219,55 @@ hơn:**
     (bỏ class `tab-panel` khỏi 6 panel con, chỉ 3 panel gộp còn giữ class
     này), `frontend/js/app.js` (`wireFileTypeGroup`).
 
+## 13. Kênh nhỏ TikTok (LIVE/VIDEO/PSA/AFF) — Report "Kênh AFF" mới
+
+- **⚠️ Cần chạy SQL migration trên Supabase trước khi dùng được** — xem
+  `/Users/canhgiang/.claude/plans/declarative-rolling-curry.md` để lấy đúng
+  câu SQL tạo 2 bảng mới: `aff_channel_reports` (Report Kênh AFF) và
+  `inhouse_creator_handles` (danh sách ID Inhouse, quản lý qua UI). Chưa
+  chạy migration thì tính năng này tự động no-op (best-effort try/except,
+  giống Combo/Master File lúc mới thêm) — Dashboard không bị lỗi, chỉ là
+  Kênh nhỏ luôn trống.
+- **Rule phân loại** (xác nhận với user 2026-08-27, dùng file thật
+  `affiliate_orders_7669777829750097685.xlsx` +
+  `Tất cả đơn hàng-2026-08-04-11_54.xlsx`):
+  1. Match theo (Mã đơn hàng, SKU ID) với file Kênh AFF đã upload → luôn
+     luôn **AFF**, bất kể trạng thái "Đã quyết toán"/"Không đủ điều kiện".
+  2. Còn lại, dựa vào 2 cột có sẵn trên file Đơn hàng TikTok — "Creator
+     Handle" và "Order Channel": handle trống/"0" → **PSA** (kênh chính);
+     handle nằm trong danh sách "ID Inhouse" (quản lý được, seed
+     bbstores.vn/bbcongso/bbstores_forlady) → map theo Order Channel
+     (Videos→VIDEO, Product cards→PSA, LIVE→LIVE); handle khác → **AFF**.
+  3. Chỉ áp dụng cho đơn kênh TikTok — kênh khác luôn để trống (NULL).
+  - **Sửa lại đề xuất ban đầu của user**: cột join đúng là **"SKU ID"** (mã
+    nội bộ TikTok, ~19 chữ số) chứ không phải "SKU phân loại" (map từ
+    "Seller SKU") — 2 cột này khác giá trị hoàn toàn, đã verify bằng đơn
+    thật (`582836886501426351`) trước khi code.
+- **Backend**: `app/aff_channel_to_parquet.py` (converter mới, output
+  (orderId, skuId) đã dedupe); `app/mapping.py` (3 field mới `skuId`/
+  `creatorHandle`/`contentChannel`, optional, chỉ TikTok có); `skuId` luôn
+  đọc dạng text (không qua `to_number()`, tránh mất độ chính xác số 19 chữ
+  số); `app/query_engine.py` (`_aff_channel_join`, `kenhNho` CASE expr mới
+  trong `_build_orders_working`, cột `kenhNho` cho Detail-table/Group
+  theo/Export/facet); `app/routers/aff_channel_reports.py` (Report CRUD,
+  không có Kênh bán hàng riêng); `app/routers/_named_list_crud.py` (factory
+  dùng chung cho Kênh bán hàng + ID Inhouse, refactor từ
+  `sales_channels.py`); `app/routers/inhouse_handles.py` (CRUD mới).
+- **Frontend**: option "Kênh AFF" trong dropdown "Loại file" của tab Dữ
+  liệu bán hàng; option "ID Inhouse" trong tab Danh mục; bộ lọc "Kênh nhỏ"
+  mới trên Dashboard (giống Kênh bán hàng); `wireNamedListTab()` factory
+  dùng chung cho 2 tab named-list.
+
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 
 - **Đa kênh khác (Lazada,...)**: áp dụng cách làm tương tự mục 10/11 khi có
   mẫu file thật.
-- **Kênh nhỏ TikTok (LIVE/VIDEO/PSA/AFF)**: user gửi mẫu file
-  `affiliate_orders_*.xlsx` (cột "ID đơn hàng"/"Loại nội dung"/"Tên người
-  dùng nhà sáng tạo",...) để join thêm 1 bộ lọc "Kênh nhỏ" theo LIVE/VIDEO/
-  PSA/AFF cho đơn TikTok. Còn thiếu: (1) cách map giá trị cột "Loại nội
-  dung" (Video/Trưng bày/Chương trình Lưu lượng truy cập bên ngoài — file
-  mẫu không có giá trị LIVE) sang 4 nhãn LIVE/VIDEO/PSA/AFF, (2) nhãn gán
-  cho đơn KHÔNG xuất hiện trong file này. User sẽ giải thích chi tiết sau;
-  phần upload chung (dropdown "Loại file" trong tab "Dữ liệu bán hàng") đã
-  làm sẵn ở mục 12, chỉ cần thêm 1 option "Kênh AFF" + Report/parser mới
-  khi có đủ thông tin.
 
 ## Cache-busting frontend
 
 Mỗi lần sửa `frontend/js/app.js` hoặc `frontend/index.html`, nhớ tăng số
 `?v=N` ở 2 dòng `<script src="js/...">` cuối `index.html` — nếu không trình
-duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=33**.
+duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=35**.
 
 ## 9. Tối ưu hóa code (reuse/simplification/efficiency)
 

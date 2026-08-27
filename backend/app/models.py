@@ -75,6 +75,21 @@ class SalesChannelOut(BaseModel):
     created_by: str
 
 
+class InhouseHandleCreateRequest(BaseModel):
+    name: str
+
+
+class InhouseHandleUpdateRequest(BaseModel):
+    name: str
+
+
+class InhouseHandleOut(BaseModel):
+    id: str
+    name: str
+    created_at: datetime
+    created_by: str
+
+
 class KpiOut(BaseModel):
     doanhSo: float
     gmv: float
@@ -119,6 +134,7 @@ class FacetsOut(BaseModel):
     itemGroups: list[str]
     productTypes: list[str]
     salesChannels: list[str]
+    kenhNho: list[str]
 
 
 class SummaryOut(BaseModel):

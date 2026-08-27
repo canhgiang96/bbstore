@@ -415,3 +415,53 @@ def test_platform_fee_and_piship_default_to_zero_when_columns_absent():
     # exist — one row per distinct orderId in this dataset (O1..O6) should
     # each get 1620 (all single-line orders here).
     assert (df["piship"] == 1620).all()
+
+
+# TikTok-only, optional columns feeding the Dashboard's "Kênh nhỏ"
+# classification (see query_engine._aff_channel_join) — skuId is TikTok's
+# internal numeric SKU id, a real ~19-digit value that would lose precision
+# if it round-tripped through a float instead of staying plain text.
+TIKTOK_KENH_NHO_HEADERS = HEADERS + ["SKU ID", "Creator Handle", "Order Channel"]
+TIKTOK_KENH_NHO_ROWS = [
+    ROWS[0] + ["1730315401307982614", "bbstores.vn", "Videos"],
+    ROWS[1] + ["", "", ""],
+]
+
+
+def make_tiktok_kenh_nho_xlsx_bytes():
+    wb = Workbook()
+    ws = wb.active
+    ws.append(TIKTOK_KENH_NHO_HEADERS)
+    for r in TIKTOK_KENH_NHO_ROWS:
+        ws.append(r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
+def test_sku_id_creator_handle_content_channel_are_captured_as_plain_text():
+    parquet_bytes, _, mapping = excel_to_parquet(make_tiktok_kenh_nho_xlsx_bytes())
+    assert mapping["skuId"] == "SKU ID"
+    assert mapping["creatorHandle"] == "Creator Handle"
+    assert mapping["contentChannel"] == "Order Channel"
+
+    df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
+    row1 = df[df["orderId"] == "O1"].iloc[0]
+    # Exact string match, not "1.7303154013079826e+18" or similar — a float
+    # round-trip would silently corrupt this real TikTok SKU id.
+    assert row1["skuId"] == "1730315401307982614"
+    assert row1["creatorHandle"] == "bbstores.vn"
+    assert row1["contentChannel"] == "Videos"
+
+    row2 = df[df["orderId"] == "O2"].iloc[0]
+    assert row2["skuId"] == ""
+    assert row2["creatorHandle"] == ""
+    assert row2["contentChannel"] == ""
+
+
+def test_sku_id_absent_when_column_not_in_file():
+    parquet_bytes, _, mapping = excel_to_parquet(make_xlsx_bytes())
+    assert "skuId" not in mapping
+    df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
+    assert (df["skuId"] == "").all()

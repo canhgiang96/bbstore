@@ -203,6 +203,13 @@ def build_dashboard_rows(raw_rows: list[dict], mapping: dict, sales_channel_name
             # from — a stored "sku" would go stale in that case, and no
             # query reads it back anyway.
             "skuVariant": derived["skuVariant"],
+            # TikTok-only, optional — feed the Dashboard's "Kênh nhỏ"
+            # classification (see query_engine._aff_channel_join). skuId is
+            # read as plain text (never to_number()) since it's a ~19-digit
+            # TikTok internal id — a float round-trip would lose precision.
+            "skuId": _text_or_empty(row, mapping, "skuId"),
+            "creatorHandle": _text_or_empty(row, mapping, "creatorHandle"),
+            "contentChannel": _text_or_empty(row, mapping, "contentChannel"),
             "originalPrice": derived["originalPrice"],
             "returnedQty": derived["returnedQty"],
             "soLuongThuc": derived["soLuongThuc"],

@@ -111,6 +111,13 @@ def test_tiktok_order_file_mapping():
     assert m["sellerSubsidy"] == "SKU Seller Discount"
     assert m["product"] == "Product Name"
     assert m["category"] == "Product Category"
+    # Feed the Dashboard's "Kênh nhỏ" classification (see
+    # query_engine._aff_channel_join) — skuId is TikTok's own internal
+    # numeric SKU id, deliberately a SEPARATE field from skuVariant/Seller
+    # SKU (confirmed against real files: they're different value spaces).
+    assert m["skuId"] == "SKU ID"
+    assert m["creatorHandle"] == "Creator Handle"
+    assert m["contentChannel"] == "Order Channel"
     # TikTok's Orders file has no Voucher/Phí sàn/Phí AFF/Piship-equivalent
     # columns (per the user, those come from the Dòng tiền-equivalent file
     # instead) — must stay unmapped rather than false-matching something.

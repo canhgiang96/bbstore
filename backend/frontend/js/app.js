@@ -312,7 +312,7 @@
   // conversion runs (Đơn hàng's Phí Piship is Shopee-only — see
   // derive.channel_has_piship on the backend — so it needs the channel at
   // upload time, not just after via the post-upload PATCH). Repopulated
-  // whenever dash.salesChannels changes (see refreshSalesChannelsList).
+  // whenever dash.salesChannels changes (see wireSalesChannelsTab).
   const UPLOAD_CHANNEL_SELECT_IDS = ["uploadChannelSelect", "cashflowUploadChannelSelect", "adjustmentsUploadChannelSelect"];
 
   function populateUploadChannelSelects() {
@@ -462,11 +462,101 @@
     },
   });
 
-  /* ================= Sales Channels (Kênh bán hàng) — a plain named list,
-     not a file-upload Report, so this tab is much simpler than the ones
-     above: no dropzone, no background processing, just add/delete. Used to
-     tag Đơn hàng/Dòng tiền Report uploads (see wireChannelSelects) and as a
-     Dashboard filter/group-by/column dimension for Orders. ================= */
+  /* ---- Kênh AFF — supplies (orderId, skuId) pairs for the Dashboard's
+     "Kênh nhỏ" query-time join (see query_engine._aff_channel_join), so
+     uploading/deleting one also refreshes it. No Kênh bán hàng column —
+     this Report type is inherently TikTok-only. ---- */
+  const affChannelTab = createReportTab({
+    endpoint: "/api/aff-channel-reports",
+    dropzoneId: "affChannelUploadDropzone", inputId: "affChannelUploadInput", summaryId: "affChannelUploadSummary",
+    listBodyId: "affChannelReportsListBody", listCountId: "affChannelReportsListCount",
+    afterChange: () => refreshDashboard(),
+  });
+
+  /* ================= Named-list tabs (Kênh bán hàng / ID Inhouse) — a
+     plain named list, not a file-upload Report, so these are much simpler
+     than createReportTab's tabs above: no dropzone, no background
+     processing, just add/delete. wireNamedListTab is the one shared
+     implementation both wireSalesChannelsTab and wireInhouseHandlesTab
+     build on (mirrors createReportTab's role for the file-upload tabs). ================= */
+  function wireNamedListTab({
+    endpoint, addCardId, addButtonId, inputId, summaryId, listBodyId, listCountId,
+    emptyLabel, nounLabel, colLabel, deleteConfirmFn, afterChange,
+  }) {
+    const isAdmin = API.isAdmin();
+    el(addCardId).hidden = !isAdmin;
+
+    async function refresh() {
+      let items;
+      try {
+        items = await API.apiJson(endpoint);
+      } catch (e) {
+        el(listBodyId).innerHTML = `<p class="muted">Không tải được danh sách: ${escapeHtml(e.message)}</p>`;
+        return;
+      }
+      if (afterChange) afterChange(items);
+      el(listCountId).textContent = `${items.length.toLocaleString("vi-VN")} ${nounLabel}`;
+
+      const body = el(listBodyId);
+      if (!items.length) {
+        body.innerHTML = `<p class="muted" style="padding:16px;">${emptyLabel}</p>`;
+        return;
+      }
+
+      body.innerHTML = `<div class="table-scroll"><table><thead><tr>
+          <th>${escapeHtml(colLabel)}</th><th>Tạo lúc</th>${isAdmin ? "<th>Thao tác</th>" : ""}
+        </tr></thead><tbody>` + items.map(c => `
+          <tr>
+            <td>${escapeHtml(c.name)}</td>
+            <td>${new Date(c.created_at).toLocaleString("vi-VN")}</td>
+            ${isAdmin ? `<td><button class="btn btn-danger btn-sm" data-del="${escapeHtml(c.id)}">Xóa</button></td>` : ""}
+          </tr>
+        `).join("") + `</tbody></table></div>`;
+
+      if (isAdmin) {
+        body.querySelectorAll("button[data-del]").forEach(btn => {
+          btn.onclick = async () => {
+            const id = btn.dataset.del;
+            const item = items.find(c => c.id === id);
+            if (!confirm(deleteConfirmFn(item ? item.name : id))) return;
+            await API.apiJson(`${endpoint}/${id}`, { method: "DELETE" });
+            await refresh();
+          };
+        });
+      }
+    }
+
+    if (isAdmin) {
+      el(addButtonId).onclick = async () => {
+        const input = el(inputId);
+        const name = input.value.trim();
+        const box = el(summaryId);
+        if (!name) return;
+        try {
+          await API.apiJson(endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name }),
+          });
+          input.value = "";
+          box.className = "import-summary ok";
+          box.textContent = `Đã thêm "${name}".`;
+          await refresh();
+        } catch (err) {
+          box.className = "import-summary err";
+          box.textContent = "Lỗi: " + err.message;
+        }
+      };
+    }
+
+    refresh();
+    return { refresh };
+  }
+
+  // dash.salesChannels is fetched once at startup here (Đơn hàng/Dòng tiền/
+  // Điều chỉnh lists render a channel <select> per row from this) and kept
+  // in sync afterwards by wireSalesChannelsTab's own add/delete actions —
+  // see UPLOAD_CHANNEL_SELECT_IDS/populateUploadChannelSelects above.
   async function refreshSalesChannelsCache() {
     try {
       dash.salesChannels = await API.apiJson("/api/sales-channels");
@@ -477,75 +567,30 @@
   }
 
   function wireSalesChannelsTab() {
-    const isAdmin = API.isAdmin();
-    el("channelAddCard").hidden = !isAdmin;
-    if (isAdmin) {
-      el("btnAddChannel").onclick = async () => {
-        const input = el("newChannelName");
-        const name = input.value.trim();
-        const box = el("channelAddSummary");
-        if (!name) return;
-        try {
-          await API.apiJson("/api/sales-channels", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name }),
-          });
-          input.value = "";
-          box.className = "import-summary ok";
-          box.textContent = `Đã thêm kênh "${name}".`;
-          await refreshSalesChannelsCache();
-          await refreshSalesChannelsList();
-        } catch (err) {
-          box.className = "import-summary err";
-          box.textContent = "Lỗi: " + err.message;
-        }
-      };
-    }
-    refreshSalesChannelsList();
+    wireNamedListTab({
+      endpoint: "/api/sales-channels",
+      addCardId: "channelAddCard", addButtonId: "btnAddChannel", inputId: "newChannelName",
+      summaryId: "channelAddSummary", listBodyId: "channelsListBody", listCountId: "channelsListCount",
+      emptyLabel: "Chưa có kênh bán hàng nào.", nounLabel: "kênh", colLabel: "Tên kênh",
+      deleteConfirmFn: name => `Xóa kênh "${name}"? Các Report đang gán kênh này sẽ chuyển về "(Chưa gán)".`,
+      afterChange: items => { dash.salesChannels = items; populateUploadChannelSelects(); },
+    });
   }
 
-  async function refreshSalesChannelsList() {
-    const isAdmin = API.isAdmin();
-    let channels;
-    try {
-      channels = await API.apiJson("/api/sales-channels");
-    } catch (e) {
-      el("channelsListBody").innerHTML = `<p class="muted">Không tải được danh sách: ${escapeHtml(e.message)}</p>`;
-      return;
-    }
-    dash.salesChannels = channels;
-    populateUploadChannelSelects();
-    el("channelsListCount").textContent = `${channels.length.toLocaleString("vi-VN")} kênh`;
-
-    const body = el("channelsListBody");
-    if (!channels.length) {
-      body.innerHTML = `<p class="muted" style="padding:16px;">Chưa có kênh bán hàng nào.</p>`;
-      return;
-    }
-
-    body.innerHTML = `<div class="table-scroll"><table><thead><tr>
-        <th>Tên kênh</th><th>Tạo lúc</th>${isAdmin ? "<th>Thao tác</th>" : ""}
-      </tr></thead><tbody>` + channels.map(c => `
-        <tr>
-          <td>${escapeHtml(c.name)}</td>
-          <td>${new Date(c.created_at).toLocaleString("vi-VN")}</td>
-          ${isAdmin ? `<td><button class="btn btn-danger btn-sm" data-del="${escapeHtml(c.id)}">Xóa</button></td>` : ""}
-        </tr>
-      `).join("") + `</tbody></table></div>`;
-
-    if (isAdmin) {
-      body.querySelectorAll("button[data-del]").forEach(btn => {
-        btn.onclick = async () => {
-          const id = btn.dataset.del;
-          const channel = channels.find(c => c.id === id);
-          if (!confirm(`Xóa kênh "${channel ? channel.name : id}"? Các Report đang gán kênh này sẽ chuyển về "(Chưa gán)".`)) return;
-          await API.apiJson(`/api/sales-channels/${id}`, { method: "DELETE" });
-          await refreshSalesChannelsCache();
-          await refreshSalesChannelsList();
-        };
-      });
-    }
+  // "ID Inhouse" — the shop's own TikTok Creator Handles (bbstores.vn,
+  // bbcongso, bbstores_forlady, ...), used server-side by the Dashboard's
+  // "Kênh nhỏ" classification (see query_engine._aff_channel_join) to tell
+  // the shop's own main-channel activity apart from an outside creator's.
+  // No client-side cache needed — unlike Kênh bán hàng, nothing else on
+  // this page reads the list (it's only ever sent to the backend).
+  function wireInhouseHandlesTab() {
+    wireNamedListTab({
+      endpoint: "/api/inhouse-handles",
+      addCardId: "inhouseAddCard", addButtonId: "btnAddInhouseHandle", inputId: "newInhouseHandle",
+      summaryId: "inhouseAddSummary", listBodyId: "inhouseListBody", listCountId: "inhouseListCount",
+      emptyLabel: "Chưa có ID Inhouse nào.", nounLabel: "ID", colLabel: "Tên người sáng tạo (Handle)",
+      deleteConfirmFn: name => `Xóa ID Inhouse "${name}"?`,
+    });
   }
 
   /* ================= Dashboard (aggregates every ready Report — see
@@ -584,6 +629,7 @@
     selectedItemGroup: new Set(),
     selectedProductType: new Set(),
     selectedSalesChannel: new Set(),
+    selectedKenhNho: new Set(),
     salesChannels: [], // raw {id,name,...} list from /api/sales-channels — see refreshSalesChannelsCache
     lastFacets: null, // cached so "Xóa lọc" can redraw the checkbox lists without waiting on a fetch
     lastKpis: null, // cached so exportOverviewExcel() can reuse exactly what's on screen, no extra fetch
@@ -637,6 +683,7 @@
     dash.selectedItemGroup.forEach(v => params.append("itemGroup", v));
     dash.selectedProductType.forEach(v => params.append("productType", v));
     dash.selectedSalesChannel.forEach(v => params.append("salesChannel", v));
+    dash.selectedKenhNho.forEach(v => params.append("kenhNho", v));
     if (sku) params.set("sku", sku);
     Object.entries(extra || {}).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== "") params.set(k, v); });
     return params;
@@ -861,6 +908,7 @@
       dash.selectedItemGroup.clear();
       dash.selectedProductType.clear();
       dash.selectedSalesChannel.clear();
+      dash.selectedKenhNho.clear();
       el("filterSku").value = "";
       if (dash.lastFacets) renderFacets(dash.lastFacets); // redraw checkboxes as unchecked
       applyFiltersAndRender();
@@ -942,12 +990,14 @@
     const itemGroups = [...(facets.itemGroups || [])].sort((a, b) => a.localeCompare(b, "vi"));
     const productTypes = [...(facets.productTypes || [])].sort((a, b) => a.localeCompare(b, "vi"));
     const salesChannels = [...(facets.salesChannels || [])].sort((a, b) => a.localeCompare(b, "vi"));
+    const kenhNhoValues = [...(facets.kenhNho || [])].sort((a, b) => a.localeCompare(b, "vi"));
 
     renderMultiSelectFacet("filterStatusList", "filterStatusSummary", dash.selectedStatus, statuses);
     renderMultiSelectFacet("filterWarehouseTypeList", "filterWarehouseTypeSummary", dash.selectedWarehouseType, warehouseTypes);
     renderMultiSelectFacet("filterItemGroupList", "filterItemGroupSummary", dash.selectedItemGroup, itemGroups);
     renderMultiSelectFacet("filterProductTypeList", "filterProductTypeSummary", dash.selectedProductType, productTypes);
     renderMultiSelectFacet("filterSalesChannelList", "filterSalesChannelSummary", dash.selectedSalesChannel, salesChannels);
+    renderMultiSelectFacet("filterKenhNhoList", "filterKenhNhoSummary", dash.selectedKenhNho, kenhNhoValues);
   }
 
   /* ---- KPIs ---- */
@@ -1030,6 +1080,7 @@
     { key: "loiNhuanGop", label: "Lợi nhuận gộp", fmt: v => fmtNumber(v) },
     { key: "trangThai", label: "Trạng thái" },
     { key: "salesChannel", label: "Kênh bán hàng" },
+    { key: "kenhNho", label: "Kênh nhỏ" },
   ];
 
   // Mirrors app/query_engine.py's ALLOWED_SORT_COLUMNS — only these flat
@@ -1048,6 +1099,7 @@
     sku: "SKU", product: "Sản phẩm", category: "Danh mục", customer: "Khách hàng",
     status: "Trạng thái", warehouseType: "Phân loại kho", itemGroup: "Phân loại mục",
     productType: "Phân loại sản phẩm", orderId: "Mã đơn hàng", salesChannel: "Kênh bán hàng",
+    kenhNho: "Kênh nhỏ",
   };
   const GROUP_AGG_COLS = [
     { key: "rowCount", label: "Số dòng", fmt: v => Number(v).toLocaleString("vi-VN") },
@@ -1320,6 +1372,7 @@
         ["Phân loại mục", setLabel(dash.selectedItemGroup)],
         ["Phân loại sản phẩm", setLabel(dash.selectedProductType)],
         ["Kênh bán hàng", setLabel(dash.selectedSalesChannel)],
+        ["Kênh nhỏ", setLabel(dash.selectedKenhNho)],
         ["SKU", el("filterSku").value.trim() || "Tất cả"],
       ];
 
@@ -1416,15 +1469,22 @@
 
   async function initApp() {
     initTabs();
-    wireFileTypeGroup("salesDataTypeSelect", { orders: "panel-orders", cashflow: "panel-cashflow", adjustments: "panel-adjustments" });
-    wireFileTypeGroup("catalogTypeSelect", { master: "panel-master", combo: "panel-combo", channels: "panel-channels" });
+    wireFileTypeGroup("salesDataTypeSelect", {
+      orders: "panel-orders", cashflow: "panel-cashflow", adjustments: "panel-adjustments",
+      affchannel: "panel-affchannel",
+    });
+    wireFileTypeGroup("catalogTypeSelect", {
+      master: "panel-master", combo: "panel-combo", channels: "panel-channels", inhouse: "panel-inhouse",
+    });
     await refreshSalesChannelsCache(); // Đơn hàng/Dòng tiền/Điều chỉnh lists render a channel <select> per row from this
     ordersTab.wire();
     cashflowTab.wire();
     comboTab.wire();
     masterTab.wire();
     adjustmentsTab.wire();
+    affChannelTab.wire();
     wireSalesChannelsTab();
+    wireInhouseHandlesTab();
     showApp();
     refreshDashboard();
   }
