@@ -204,10 +204,35 @@ hơn:**
   convert lại bằng đúng mapping cột đã lưu, chỉ đổi kênh dùng để gate
   Piship. `app/routers/_report_crud.py` (`update_channel`).
 
+## 12. Gộp tab nav thành "Dữ liệu bán hàng" + "Danh mục"
+
+- Theo yêu cầu user: 7 tab trên cùng (Đơn hàng, Master File, Combo, Dòng
+  tiền, Điều chỉnh doanh thu, Kênh bán hàng) rút gọn còn 3 (Dashboard, Dữ
+  liệu bán hàng, Danh mục):
+  - **Dữ liệu bán hàng**: gộp Đơn hàng + Dòng tiền + Điều chỉnh doanh thu,
+    chọn qua dropdown "Loại file" (sẽ thêm Kênh AFF TikTok vào đây sau).
+  - **Danh mục**: gộp Master File + Combo + Kênh bán hàng, cùng cơ chế
+    dropdown "Loại file".
+  - Chỉ đổi cấu trúc nav/hiển thị — mỗi panel con (`panel-orders`,
+    `panel-cashflow`,...) giữ nguyên id/wiring cũ từ `createReportTab()`,
+    không đổi logic upload/list/xóa/gán kênh nào cả. `frontend/index.html`
+    (bỏ class `tab-panel` khỏi 6 panel con, chỉ 3 panel gộp còn giữ class
+    này), `frontend/js/app.js` (`wireFileTypeGroup`).
+
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 
 - **Đa kênh khác (Lazada,...)**: áp dụng cách làm tương tự mục 10/11 khi có
   mẫu file thật.
+- **Kênh nhỏ TikTok (LIVE/VIDEO/PSA/AFF)**: user gửi mẫu file
+  `affiliate_orders_*.xlsx` (cột "ID đơn hàng"/"Loại nội dung"/"Tên người
+  dùng nhà sáng tạo",...) để join thêm 1 bộ lọc "Kênh nhỏ" theo LIVE/VIDEO/
+  PSA/AFF cho đơn TikTok. Còn thiếu: (1) cách map giá trị cột "Loại nội
+  dung" (Video/Trưng bày/Chương trình Lưu lượng truy cập bên ngoài — file
+  mẫu không có giá trị LIVE) sang 4 nhãn LIVE/VIDEO/PSA/AFF, (2) nhãn gán
+  cho đơn KHÔNG xuất hiện trong file này. User sẽ giải thích chi tiết sau;
+  phần upload chung (dropdown "Loại file" trong tab "Dữ liệu bán hàng") đã
+  làm sẵn ở mục 12, chỉ cần thêm 1 option "Kênh AFF" + Report/parser mới
+  khi có đủ thông tin.
 
 ## Cache-busting frontend
 

@@ -42,12 +42,8 @@
     </div>
     <nav class="tabs" id="mainTabs">
       <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
-      <button class="tab-btn" data-tab="orders">Đơn hàng</button>
-      <button class="tab-btn" data-tab="master">Master File</button>
-      <button class="tab-btn" data-tab="combo">Combo</button>
-      <button class="tab-btn" data-tab="cashflow">Dòng tiền</button>
-      <button class="tab-btn" data-tab="adjustments">Điều chỉnh doanh thu</button>
-      <button class="tab-btn" data-tab="channels">Kênh bán hàng</button>
+      <button class="tab-btn" data-tab="salesdata">Dữ liệu bán hàng</button>
+      <button class="tab-btn" data-tab="catalog">Danh mục</button>
     </nav>
     <div class="user-menu">
       <span class="muted" id="userDisplayName"></span>
@@ -64,7 +60,7 @@
     <div id="dashboardEmpty" class="empty-state card" hidden>
       <div class="empty-icon">📦</div>
       <h2>Chưa có Report nào</h2>
-      <p class="muted" id="dashboardEmptyHint">Vào tab <strong>Đơn hàng</strong> để tải lên file Excel.</p>
+      <p class="muted" id="dashboardEmptyHint">Vào tab <strong>Dữ liệu bán hàng</strong> → chọn Loại file <strong>Đơn hàng</strong> để tải lên file Excel.</p>
     </div>
 
     <div id="dashboardContent" hidden>
@@ -346,8 +342,19 @@
     </div>
   </section>
 
-  <!-- ============ ORDERS / REPORTS TAB ============ -->
-  <section class="tab-panel" id="panel-orders" hidden>
+  <!-- ============ DỮ LIỆU BÁN HÀNG (merged: Đơn hàng / Dòng tiền / Điều chỉnh doanh thu) ============ -->
+  <section class="tab-panel" id="panel-salesdata" hidden>
+    <div class="filter-item" style="max-width:280px;margin-bottom:16px;">
+      <label>Loại file</label>
+      <select id="salesDataTypeSelect">
+        <option value="orders">Đơn hàng</option>
+        <option value="cashflow">Dòng tiền</option>
+        <option value="adjustments">Điều chỉnh doanh thu</option>
+      </select>
+    </div>
+
+  <!-- ============ ORDERS / REPORTS ============ -->
+  <section id="panel-orders" hidden>
     <div class="data-panel-header">
       <h2>Đơn hàng — Report</h2>
     </div>
@@ -374,8 +381,8 @@
     </div>
   </section>
 
-  <!-- ============ DÒNG TIỀN / CASHFLOW REPORTS TAB (server-backed — supplies Phí AFF for the Orders Dashboard's join) ============ -->
-  <section class="tab-panel" id="panel-cashflow" hidden>
+  <!-- ============ DÒNG TIỀN / CASHFLOW REPORTS (server-backed — supplies Phí AFF for the Orders Dashboard's join) ============ -->
+  <section id="panel-cashflow" hidden>
     <div class="data-panel-header">
       <h2>Dòng tiền — Report</h2>
     </div>
@@ -402,56 +409,8 @@
     </div>
   </section>
 
-  <!-- ============ COMBO REPORTS TAB (server-backed — explodes matching Orders SKUs into their components) ============ -->
-  <section class="tab-panel" id="panel-combo" hidden>
-    <div class="data-panel-header">
-      <h2>Combo — Report</h2>
-    </div>
-
-    <div class="drop-zone" id="comboUploadDropzone">
-      <div class="drop-zone-icon">📁</div>
-      <h2>Kéo thả file Excel vào đây</h2>
-      <p>hoặc</p>
-      <label class="btn btn-primary" for="comboUploadInput">Chọn file (.xlsx, .xls, .csv)</label>
-      <input type="file" id="comboUploadInput" accept=".xlsx,.xls,.csv" hidden />
-      <div class="import-summary" id="comboUploadSummary"></div>
-    </div>
-
-    <div class="card table-card">
-      <div class="table-card-header">
-        <h3>Danh sách Report</h3>
-        <span class="muted" id="comboReportsListCount"></span>
-      </div>
-      <div id="comboReportsListBody"></div>
-    </div>
-  </section>
-
-  <!-- ============ MASTER FILE REPORTS TAB (server-backed — supplies cost/category lookup for the Orders Dashboard's join) ============ -->
-  <section class="tab-panel" id="panel-master" hidden>
-    <div class="data-panel-header">
-      <h2>Master File — Report</h2>
-    </div>
-
-    <div class="drop-zone" id="masterUploadDropzone">
-      <div class="drop-zone-icon">📁</div>
-      <h2>Kéo thả file Excel vào đây</h2>
-      <p>hoặc</p>
-      <label class="btn btn-primary" for="masterUploadInput">Chọn file (.xlsx, .xls, .csv)</label>
-      <input type="file" id="masterUploadInput" accept=".xlsx,.xls,.csv" hidden />
-      <div class="import-summary" id="masterUploadSummary"></div>
-    </div>
-
-    <div class="card table-card">
-      <div class="table-card-header">
-        <h3>Danh sách Report</h3>
-        <span class="muted" id="masterReportsListCount"></span>
-      </div>
-      <div id="masterReportsListBody"></div>
-    </div>
-  </section>
-
-  <!-- ============ ĐIỀU CHỈNH DOANH THU REPORTS TAB (server-backed — standalone record-keeping viewer, not joined into the Orders Dashboard) ============ -->
-  <section class="tab-panel" id="panel-adjustments" hidden>
+  <!-- ============ ĐIỀU CHỈNH DOANH THU (server-backed — standalone record-keeping viewer, not joined into the Orders Dashboard) ============ -->
+  <section id="panel-adjustments" hidden>
     <div class="data-panel-header">
       <h2>Điều chỉnh doanh thu — Report</h2>
     </div>
@@ -478,8 +437,69 @@
     </div>
   </section>
 
+  </section><!-- /#panel-salesdata -->
+
+  <!-- ============ DANH MỤC (merged: Master File / Combo / Kênh bán hàng) ============ -->
+  <section class="tab-panel" id="panel-catalog" hidden>
+    <div class="filter-item" style="max-width:280px;margin-bottom:16px;">
+      <label>Loại file</label>
+      <select id="catalogTypeSelect">
+        <option value="master">Master File</option>
+        <option value="combo">Combo</option>
+        <option value="channels">Kênh bán hàng</option>
+      </select>
+    </div>
+
+  <!-- ============ MASTER FILE REPORTS (server-backed — supplies cost/category lookup for the Orders Dashboard's join) ============ -->
+  <section id="panel-master" hidden>
+    <div class="data-panel-header">
+      <h2>Master File — Report</h2>
+    </div>
+
+    <div class="drop-zone" id="masterUploadDropzone">
+      <div class="drop-zone-icon">📁</div>
+      <h2>Kéo thả file Excel vào đây</h2>
+      <p>hoặc</p>
+      <label class="btn btn-primary" for="masterUploadInput">Chọn file (.xlsx, .xls, .csv)</label>
+      <input type="file" id="masterUploadInput" accept=".xlsx,.xls,.csv" hidden />
+      <div class="import-summary" id="masterUploadSummary"></div>
+    </div>
+
+    <div class="card table-card">
+      <div class="table-card-header">
+        <h3>Danh sách Report</h3>
+        <span class="muted" id="masterReportsListCount"></span>
+      </div>
+      <div id="masterReportsListBody"></div>
+    </div>
+  </section>
+
+  <!-- ============ COMBO REPORTS (server-backed — explodes matching Orders SKUs into their components) ============ -->
+  <section id="panel-combo" hidden>
+    <div class="data-panel-header">
+      <h2>Combo — Report</h2>
+    </div>
+
+    <div class="drop-zone" id="comboUploadDropzone">
+      <div class="drop-zone-icon">📁</div>
+      <h2>Kéo thả file Excel vào đây</h2>
+      <p>hoặc</p>
+      <label class="btn btn-primary" for="comboUploadInput">Chọn file (.xlsx, .xls, .csv)</label>
+      <input type="file" id="comboUploadInput" accept=".xlsx,.xls,.csv" hidden />
+      <div class="import-summary" id="comboUploadSummary"></div>
+    </div>
+
+    <div class="card table-card">
+      <div class="table-card-header">
+        <h3>Danh sách Report</h3>
+        <span class="muted" id="comboReportsListCount"></span>
+      </div>
+      <div id="comboReportsListBody"></div>
+    </div>
+  </section>
+
   <!-- ============ SALES CHANNELS (Kênh bán hàng) — plain named list, not a file-upload Report; used to tag Đơn hàng/Dòng tiền/Điều chỉnh doanh thu uploads ============ -->
-  <section class="tab-panel" id="panel-channels" hidden>
+  <section id="panel-channels" hidden>
     <div class="data-panel-header">
       <h2>Kênh bán hàng</h2>
     </div>
@@ -504,6 +524,8 @@
     </div>
   </section>
 
+  </section><!-- /#panel-catalog -->
+
 </main>
 
 <footer class="footer">
@@ -512,7 +534,7 @@
 
 </div><!-- /#appShell -->
 
-<script src="js/api.js?v=33"></script>
-<script src="js/app.js?v=33"></script>
+<script src="js/api.js?v=34"></script>
+<script src="js/app.js?v=34"></script>
 </body>
 </html>

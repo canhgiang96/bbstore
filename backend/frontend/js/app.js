@@ -89,6 +89,26 @@
     });
   }
 
+  // "Dữ liệu bán hàng" (Đơn hàng/Dòng tiền/Điều chỉnh doanh thu) and "Danh
+  // mục" (Master File/Combo/Kênh bán hàng) each bundle several Report tabs
+  // behind one top-level nav entry — a "Loại file" <select> switches which
+  // one is visible inside. The individual panels (panel-orders,
+  // panel-cashflow, ...) keep their own ids/wiring from createReportTab()
+  // unchanged; this only toggles their `hidden` attribute, independent of
+  // #mainTabs' own show/hide (nesting inside a hidden parent tab already
+  // keeps them invisible — this only decides which one shows once the
+  // parent tab itself is active).
+  function wireFileTypeGroup(selectId, panelIdByValue) {
+    const sel = el(selectId);
+    function sync() {
+      Object.entries(panelIdByValue).forEach(([value, panelId]) => {
+        el(panelId).hidden = sel.value !== value;
+      });
+    }
+    sel.addEventListener("change", sync);
+    sync();
+  }
+
   /* ================= Report tabs (API-backed) =================
      Đơn hàng/Dòng tiền/Combo/Master File/Điều chỉnh doanh thu all follow the
      same "dropzone upload -> process in background -> poll -> render list
@@ -587,7 +607,7 @@
       el("dashboardContent").hidden = true;
       if (!reports.length) {
         el("dashboardEmptyHint").innerHTML = API.isAdmin()
-          ? `Vào tab <strong>Đơn hàng</strong> để tải lên file Excel.`
+          ? `Vào tab <strong>Dữ liệu bán hàng</strong> → chọn Loại file <strong>Đơn hàng</strong> để tải lên file Excel.`
           : `Chưa có Admin nào tải lên Report.`;
       } else {
         el("dashboardEmptyHint").textContent = "Report đang được xử lý, vui lòng chờ trong giây lát...";
@@ -1396,6 +1416,8 @@
 
   async function initApp() {
     initTabs();
+    wireFileTypeGroup("salesDataTypeSelect", { orders: "panel-orders", cashflow: "panel-cashflow", adjustments: "panel-adjustments" });
+    wireFileTypeGroup("catalogTypeSelect", { master: "panel-master", combo: "panel-combo", channels: "panel-channels" });
     await refreshSalesChannelsCache(); // Đơn hàng/Dòng tiền/Điều chỉnh lists render a channel <select> per row from this
     ordersTab.wire();
     cashflowTab.wire();
