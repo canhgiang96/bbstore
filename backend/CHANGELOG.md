@@ -187,6 +187,15 @@ hơn:**
   lại. File chính: `app/routers/_report_crud.py` (`channel_aware_converter`,
   `sales_channel_id` tại `POST /api/reports`), `frontend/js/app.js`
   (`uploadChannelSelectId`, `populateUploadChannelSelects`).
+- **Đơn TikTok bị hoàn toàn bộ → Phí AFF = 0** (xác nhận với user
+  2026-08-27, đơn thật `582572544565151151`): khi 1 đơn có nhiều dòng
+  trong file Dòng tiền và tổng "Tổng doanh thu" của các dòng đó = 0 (đơn
+  bị hoàn/huỷ hoàn toàn), cột Hoa hồng liên kết/Hoa hồng liên kết Quảng
+  cáo cửa hàng được coi là 0 khi tính cả Phí AFF lẫn Phí sàn cho đơn đó —
+  vì dòng hoàn của TikTok không luôn đảo ngược lại đúng 2 cột này, cộng
+  thô sẽ để lại Phí AFF khác 0 cho 1 đơn không tạo ra doanh thu nào. Tổng
+  chi phí (Phí AFF + Phí sàn) không đổi, chỉ chuyển hẳn sang Phí sàn.
+  `app/cashflow_to_parquet.py` (`totalRevenue` mapping mới, `_REVENUE_EPSILON`).
 
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 

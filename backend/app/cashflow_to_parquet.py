@@ -15,6 +15,10 @@ a real TikTok income export, 2026-08-26/27):
 Both channels store these as negative amounts; the Dashboard wants them
 positive, same as Shopee's phiAff always has.
 
+For a fully-refunded TikTok order (its rows' "Tổng doanh thu" nets to 0),
+the affiliate-commission columns are treated as 0 in both formulas above —
+see _REVENUE_EPSILON's comment for why.
+
 This is intentionally a small, separate module rather than reusing
 app.mapping's FIELDS/detect_mapping() — that machinery is Orders-specific
 (it requires a "date" column, which Cashflow doesn't need at all here).
@@ -39,7 +43,20 @@ CASHFLOW_KEYWORDS = {
     "totalFee": ["tong phi"],
     "vatWithheld": ["thue gtgt do tiktok shop khau tru"],
     "pitWithheld": ["thue tncn do tiktok shop khau tru"],
+    "totalRevenue": ["tong doanh thu"],
 }
+
+# On a full return, TikTok's own settlement rows for an order net "Tổng
+# doanh thu" to 0 (a positive charge row followed by its negative reversal)
+# — but the affiliate-commission columns don't always get a matching
+# reversal row, so summing them as-is leaves a nonzero Phí AFF for an order
+# that earned nothing. Confirmed with the user (2026-08-27, real order
+# 582572544565151151: charge row had Hoa hồng liên kết -26294, its return
+# row had 0, net doanh thu 0): when an order's rows net to 0 revenue, its
+# affiliate-commission columns are treated as 0 too — the money doesn't
+# disappear, it just stops being categorized as Phí AFF and stays inside
+# Phí sàn (Tổng phí) instead, since total fee is unaffected by this rule.
+_REVENUE_EPSILON = 0.5
 
 # TikTok's "income" export marks a handful of rows (platform compensation,
 # not a real order) with a different value here — confirmed with the user
@@ -83,21 +100,32 @@ def cashflow_excel_to_parquet(file_like, sheet_name=0) -> tuple[bytes, int, dict
 
     order_col = mapping["orderId"]
     type_col = mapping.get("transactionType")
+    revenue_col = mapping.get("totalRevenue")
 
-    rows = []
+    included_rows = []
+    order_revenue_totals: dict[str, float] = {}
     for row in raw_rows:
         if type_col and str(row.get(type_col, "") or "").strip() not in ("", _CASHFLOW_ORDER_TRANSACTION_TYPE):
             continue
         order_id = str(row.get(order_col, "") or "").strip()
         if not order_id:
             continue
+        included_rows.append((order_id, row))
+        if revenue_col:
+            order_revenue_totals[order_id] = order_revenue_totals.get(order_id, 0.0) + to_number(row.get(revenue_col))
 
+    rows = []
+    for order_id, row in included_rows:
         if has_direct_aff:
             phi_aff = -to_number(row.get(mapping["phiAff"]))
             platform_fee = 0.0
         else:
-            aff1 = to_number(row.get(mapping["affiliateCommission"])) if "affiliateCommission" in mapping else 0.0
-            aff2 = to_number(row.get(mapping["affiliateAdsCommission"])) if "affiliateAdsCommission" in mapping else 0.0
+            order_fully_refunded = revenue_col and abs(order_revenue_totals.get(order_id, 1.0)) < _REVENUE_EPSILON
+            if order_fully_refunded:
+                aff1 = aff2 = 0.0
+            else:
+                aff1 = to_number(row.get(mapping["affiliateCommission"])) if "affiliateCommission" in mapping else 0.0
+                aff2 = to_number(row.get(mapping["affiliateAdsCommission"])) if "affiliateAdsCommission" in mapping else 0.0
             total_fee = to_number(row.get(mapping["totalFee"])) if "totalFee" in mapping else 0.0
             vat = to_number(row.get(mapping["vatWithheld"])) if "vatWithheld" in mapping else 0.0
             pit = to_number(row.get(mapping["pitWithheld"])) if "pitWithheld" in mapping else 0.0

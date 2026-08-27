@@ -119,3 +119,41 @@ def test_tiktok_style_file_computes_phi_aff_and_platform_fee():
     assert t2["platformFee"] == 78660 - 17860 - 3637 - 3247 - 1624
 
     assert "T3" not in by_order.index
+
+
+TIKTOK_REVENUE_HEADERS = TIKTOK_HEADERS + ["Tổng doanh thu"]
+
+TIKTOK_REVENUE_ROWS = [
+    # T2: ordinary single-row order with nonzero net revenue — unaffected
+    # by the full-refund rule, behaves exactly as before.
+    ["T2", "Đơn hàng", -78660, -17860, -3637, -3247, -1624, 100000],
+    # T4: a fully-refunded order — an original-charge row plus its return
+    # row, whose "Tổng doanh thu" nets to 0. Mirrors a real TikTok order
+    # (582572544565151151, confirmed with the user 2026-08-27): the return
+    # row's affiliate columns are already 0 (TikTok never reversed them),
+    # so summing the charge row's -26294 as-is would leave a nonzero Phí
+    # AFF for an order that made no money.
+    ["T4", "Đơn hàng", -81883, -26294, 0, -2191, -1096, 219120],
+    ["T4", "Đơn hàng", 28889, 0, 0, 2191, 1096, -219120],
+]
+
+
+def test_tiktok_fully_refunded_order_zeroes_affiliate_commission():
+    parquet_bytes, row_count, mapping = cashflow_excel_to_parquet(
+        make_xlsx_bytes(TIKTOK_REVENUE_HEADERS, TIKTOK_REVENUE_ROWS)
+    )
+    assert row_count == 3
+    assert mapping["totalRevenue"] == "Tổng doanh thu"
+
+    df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
+
+    t2 = df[df["orderId"] == "T2"]
+    assert t2["phiAff"].sum() == 17860 + 3637
+    assert t2["platformFee"].sum() == 78660 - 17860 - 3637 - 3247 - 1624
+
+    t4 = df[df["orderId"] == "T4"]
+    # Affiliate commission is reallocated into platformFee, not lost — the
+    # combined total (52994) matches what an unaffected order's formula
+    # would give if its Hoa hồng liên kết columns had simply been 0.
+    assert t4["phiAff"].sum() == 0
+    assert t4["platformFee"].sum() == 52994
