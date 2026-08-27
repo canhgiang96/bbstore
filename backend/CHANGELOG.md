@@ -196,14 +196,18 @@ hơn:**
   thô sẽ để lại Phí AFF khác 0 cho 1 đơn không tạo ra doanh thu nào. Tổng
   chi phí (Phí AFF + Phí sàn) không đổi, chỉ chuyển hẳn sang Phí sàn.
   `app/cashflow_to_parquet.py` (`totalRevenue` mapping mới, `_REVENUE_EPSILON`).
+- **PATCH gán Kênh bán hàng giờ tự re-convert** (fix bug: report Đơn hàng
+  TikTok cũ được gán kênh SAU khi upload — qua tab Kênh bán hàng — vẫn hiện
+  Phí Piship khác 0 trên Dashboard). Trước đây PATCH `/{id}/channel` chỉ
+  sửa metadata, không tính lại Piship; giờ với Report Đơn hàng
+  (`channel_aware_converter`), PATCH này tự tải lại file gốc từ R2 và
+  convert lại bằng đúng mapping cột đã lưu, chỉ đổi kênh dùng để gate
+  Piship. `app/routers/_report_crud.py` (`update_channel`).
 
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 
 - **Đa kênh khác (Lazada,...)**: áp dụng cách làm tương tự mục 10/11 khi có
   mẫu file thật.
-- **Gán lại kênh sau upload không tự re-convert**: nếu đổi kênh của 1
-  Report qua PATCH (không phải lúc upload), Piship của report đó KHÔNG tự
-  cập nhật lại — cần dùng "Chỉnh cột" (PATCH .../mapping) để convert lại.
 
 ## Cache-busting frontend
 

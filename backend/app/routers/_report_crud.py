@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import tempfile
 import uuid
 from typing import Callable, Optional
 
@@ -23,6 +24,7 @@ from starlette.concurrency import run_in_threadpool
 from .. import db, storage
 from ..deps import get_current_user, require_admin
 from ..models import ChannelUpdateRequest, ReportCreatedOut, ReportDetailOut, ReportOut
+from ..query_engine import invalidate_local_parquet_cache
 
 # Excel-to-parquet conversion (openpyxl + pandas) is the single most
 # memory-hungry step in the whole upload pipeline, and the app runs on a
@@ -166,16 +168,35 @@ def create_report_crud_router(
 
         @router.patch("/{report_id}/channel")
         async def update_channel(report_id: str, body: ChannelUpdateRequest, user: dict = Depends(require_admin)):
-            # Metadata-only tag — does NOT reconvert the file. For
-            # channel_aware_converter routers (Orders), the channel picked
-            # at UPLOAD time is what actually gated Phí Piship during
-            # conversion; changing it here afterwards doesn't retroactively
-            # recompute already-converted rows (re-run PATCH .../mapping to
-            # force a reconversion if that's needed).
             row = await db.pg_select_one(table, {"id": f"eq.{report_id}"})
             if not row:
                 raise HTTPException(status_code=404, detail="Không tìm thấy Report.")
             await db.pg_update(table, {"id": f"eq.{report_id}"}, {"sales_channel_id": body.sales_channel_id})
+
+            if channel_aware_converter and row.get("original_xlsx_key"):
+                # Phí Piship (Shopee-only, see derive.channel_has_piship) is
+                # gated at conversion time, not query time — a channel
+                # assigned only via this PATCH (rather than at upload) must
+                # reconvert the file now with the same column mapping it
+                # already resolved, or the stored Parquet keeps whatever
+                # Piship value the old channel (or no channel) produced.
+                channel_row = (
+                    await db.pg_select_one("sales_channels", {"id": f"eq.{body.sales_channel_id}"})
+                    if body.sales_channel_id
+                    else None
+                )
+                channel_name = channel_row["name"] if channel_row else None
+                with tempfile.NamedTemporaryFile(suffix=".xlsx") as tmp:
+                    await run_in_threadpool(storage.download_to_path, row["original_xlsx_key"], tmp.name)
+                    parquet_bytes, row_count, mapping = await convert_with_backpressure(
+                        converter, tmp.name, mapping_override=row.get("mapping"), sales_channel_name=channel_name
+                    )
+                await run_in_threadpool(
+                    storage.upload_bytes, parquet_key_fn(report_id), parquet_bytes, "application/octet-stream"
+                )
+                invalidate_local_parquet_cache(report_id)
+                await db.pg_update(table, {"id": f"eq.{report_id}"}, {"mapping": mapping, "row_count": row_count})
+
             return {"ok": True}
 
     @router.delete("/{report_id}", status_code=204)
