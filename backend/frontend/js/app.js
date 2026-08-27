@@ -117,6 +117,7 @@
     endpoint, dropzoneId, inputId, summaryId, listBodyId, listCountId,
     hasChannel = false, afterChange = null, afterChannelChange = null,
     extraColumns = [], rowSuffix = null, afterListRendered = null, onBeforeDelete = null,
+    uploadChannelSelectId = null,
   }) {
     const pollTimers = {};
 
@@ -202,6 +203,10 @@
       try {
         const formData = new FormData();
         formData.append("file", file);
+        if (uploadChannelSelectId) {
+          const channelId = el(uploadChannelSelectId).value;
+          if (channelId) formData.append("sales_channel_id", channelId);
+        }
         const res = await API.apiFetch(endpoint, { method: "POST", body: formData });
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
@@ -282,6 +287,26 @@
     });
   }
 
+  // The Đơn hàng/Dòng tiền/Điều chỉnh doanh thu upload dropzones each have
+  // their own "Kênh bán hàng" <select> so the channel is known BEFORE
+  // conversion runs (Đơn hàng's Phí Piship is Shopee-only — see
+  // derive.channel_has_piship on the backend — so it needs the channel at
+  // upload time, not just after via the post-upload PATCH). Repopulated
+  // whenever dash.salesChannels changes (see refreshSalesChannelsList).
+  const UPLOAD_CHANNEL_SELECT_IDS = ["uploadChannelSelect", "cashflowUploadChannelSelect", "adjustmentsUploadChannelSelect"];
+
+  function populateUploadChannelSelects() {
+    const optionsHtml = ['<option value="">(Chưa gán)</option>']
+      .concat(dash.salesChannels.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name)}</option>`))
+      .join("");
+    UPLOAD_CHANNEL_SELECT_IDS.forEach(id => {
+      const sel = el(id);
+      const prevValue = sel.value;
+      sel.innerHTML = optionsHtml;
+      if ([...sel.options].some(o => o.value === prevValue)) sel.value = prevValue;
+    });
+  }
+
   /* ---- Đơn hàng (Orders) — the only tab whose channel feeds the Dashboard's
      query engine, so it's the only one wiring afterChannelChange. ---- */
   const ordersTab = createReportTab({
@@ -291,6 +316,7 @@
     hasChannel: true,
     afterChange: () => refreshDashboard(),
     afterChannelChange: () => refreshDashboard(),
+    uploadChannelSelectId: "uploadChannelSelect",
   });
 
   /* ---- Dòng tiền (Cashflow) — supplies Phí AFF for the Dashboard's
@@ -301,6 +327,7 @@
     listBodyId: "cashflowReportsListBody", listCountId: "cashflowReportsListCount",
     hasChannel: true,
     afterChange: () => refreshDashboard(),
+    uploadChannelSelectId: "cashflowUploadChannelSelect",
   });
 
   /* ---- Combo — explodes matching Orders skuVariant into sub-SKU
@@ -397,6 +424,7 @@
     dropzoneId: "adjustmentsUploadDropzone", inputId: "adjustmentsUploadInput", summaryId: "adjustmentsUploadSummary",
     listBodyId: "adjustmentsReportsListBody", listCountId: "adjustmentsReportsListCount",
     hasChannel: true,
+    uploadChannelSelectId: "adjustmentsUploadChannelSelect",
     extraColumns: [{
       label: "Dữ liệu",
       cell: r => r.status === "ready"
@@ -425,6 +453,7 @@
     } catch (e) {
       dash.salesChannels = [];
     }
+    populateUploadChannelSelects();
   }
 
   function wireSalesChannelsTab() {
@@ -466,6 +495,7 @@
       return;
     }
     dash.salesChannels = channels;
+    populateUploadChannelSelects();
     el("channelsListCount").textContent = `${channels.length.toLocaleString("vi-VN")} kênh`;
 
     const body = el("channelsListBody");

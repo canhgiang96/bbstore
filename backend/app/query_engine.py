@@ -224,13 +224,17 @@ def _combo_join(combo_source) -> tuple[str, list, str, str, str]:
     return join_sql, [combo_source], sku_variant_expr, "COALESCE(cm.ratio, 1)", "cm.slot"
 
 
-def _cashflow_agg_join(available: set, cashflow_source) -> tuple[str, list, str]:
-    """Returns (join_sql, join_params, aff_expr) to LEFT JOIN per-order Phí
-    AFF from ready Cashflow Reports into an Orders query whose FROM clause
-    is aliased "o". aff_expr is always safe to use unconditionally — it's a
-    literal "0" when there's no cashflow data yet, or when this Orders
-    Report predates the "orderPaidRatio" column (same backward-compat
-    pattern as discount/voucher/platformFee/piship).
+def _cashflow_agg_join(con, available: set, cashflow_source) -> tuple[str, list, str, str]:
+    """Returns (join_sql, join_params, aff_expr, platform_fee_expr) to LEFT
+    JOIN per-order Phí AFF (and, for TikTok Cashflow Reports, Phí sàn) from
+    ready Cashflow Reports into an Orders query whose FROM clause is
+    aliased "o". Both expressions are always safe to use unconditionally —
+    each is a literal "0" when there's no cashflow data yet, when this
+    Orders Report predates the "orderPaidRatio" column (same backward-compat
+    pattern as discount/voucher/platformFee/piship), or — for
+    platform_fee_expr — when no uploaded Cashflow Report has a "platformFee"
+    column yet (Shopee's own Cashflow Reports never do; that fee comes from
+    the Orders file itself instead — see excel_to_parquet.py).
 
     The GROUP BY in the subquery guards against the same Mã đơn hàng
     appearing in more than one uploaded Cashflow Report — summed once
@@ -238,15 +242,19 @@ def _cashflow_agg_join(available: set, cashflow_source) -> tuple[str, list, str]
     """
     order_ratio_col = 'COALESCE(o."orderPaidRatio", 0)' if "orderPaidRatio" in available else "0"
     if not cashflow_source:
-        return "", [], "0"
+        return "", [], "0", "0"
+    cashflow_available = _available_columns(con, cashflow_source)
+    has_platform_fee = "platformFee" in cashflow_available
+    platform_fee_select = ', SUM("platformFee") AS cf_platform_fee' if has_platform_fee else ""
     join_sql = (
         'LEFT JOIN ('
-        'SELECT "orderId" AS cf_order_id, SUM("phiAff") AS cf_phi_aff '
+        f'SELECT "orderId" AS cf_order_id, SUM("phiAff") AS cf_phi_aff{platform_fee_select} '
         'FROM read_parquet(?, union_by_name=true) GROUP BY "orderId"'
         ') cf ON o."orderId" = cf.cf_order_id'
     )
     aff_expr = f'({order_ratio_col} * COALESCE(cf.cf_phi_aff, 0))'
-    return join_sql, [cashflow_source], aff_expr
+    platform_fee_expr = f'({order_ratio_col} * COALESCE(cf.cf_platform_fee, 0))' if has_platform_fee else "0"
+    return join_sql, [cashflow_source], aff_expr, platform_fee_expr
 
 
 def _master_join(master_source, sku_variant_expr: str) -> tuple[str, list, str, str, str, str]:
@@ -360,10 +368,17 @@ def _build_orders_working(
     piship_col = 'COALESCE("piship", 0)' if "piship" in available else "0"
 
     combo_join_sql, combo_params, sku_variant_expr, ratio_expr, slot_expr = _combo_join(combo_source)
-    cashflow_join_sql, cashflow_params, aff_expr = _cashflow_agg_join(available, cashflow_source)
+    cashflow_join_sql, cashflow_params, aff_expr, cashflow_platform_fee_expr = _cashflow_agg_join(
+        con, available, cashflow_source
+    )
     master_join_sql, master_params, muc_expr, phan_loai_sp_expr, phan_loai_kho_expr, gia_von_expr = _master_join(
         master_source, sku_variant_expr
     )
+    # Phí sàn can come from the Orders file itself (Shopee) and/or from a
+    # Cashflow Report (TikTok) — see _cashflow_agg_join. Combined here so
+    # every downstream use (the persisted "platformFee" column, nmv) stays
+    # in sync automatically regardless of which channel(s) contributed.
+    combined_platform_fee_col = f"({platform_fee_col} + {cashflow_platform_fee_expr})"
     channel_source_sql, channel_params = _channel_tagged_source_sql(parquet_source, channel_source)
     date_filter_sql, date_filter_params = _base_date_filter_sql(from_date, to_date)
 
@@ -399,7 +414,7 @@ def _build_orders_working(
     )
     doanh_thu_thuan_row_expr = f"({gmv_row_expr} - {scoped_discount_row_expr} - {scoped_voucher_row_expr})"
     nmv_row_expr = (
-        f"({doanh_thu_thuan_row_expr} - {platform_fee_col} * {ratio_expr} "
+        f"({doanh_thu_thuan_row_expr} - {combined_platform_fee_col} * {ratio_expr} "
         f"- {piship_row_expr} - {phi_aff_row_expr})"
     )
     scoped_gia_von_row_expr = (
@@ -428,7 +443,7 @@ def _build_orders_working(
           o."trangThai" AS "trangThai",
           {discount_col} * {ratio_expr} AS "discount",
           {voucher_col} * {ratio_expr} AS "voucher",
-          {platform_fee_col} * {ratio_expr} AS "platformFee",
+          {combined_platform_fee_col} * {ratio_expr} AS "platformFee",
           CASE WHEN ({slot_expr} IS NULL OR {slot_expr} = 1) AND o."trangThai" != 'Hủy chưa XK' THEN {piship_col} ELSE 0 END AS "piship",
           ({aff_expr}) * {ratio_expr} AS "phiAff",
           {warehouse_expr} AS "phanLoaiKho",

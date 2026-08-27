@@ -124,3 +124,25 @@ def compute_piship_fee(is_first_line_of_order: bool) -> float:
     of double-counting it once per line.
     """
     return PISHIP_FEE_PER_ORDER if is_first_line_of_order else 0.0
+
+
+# Piship is Shopee's own delivery-partner fee scheme — it doesn't apply to
+# other channels (confirmed with the user: TikTok has no Piship-equivalent
+# at all). A channel not in this set defaults to "no Piship" rather than
+# "has Piship", since that's a Shopee-specific concept new channels are
+# very unlikely to share.
+PISHIP_CHANNEL_NAMES = {"shopee"}
+
+
+def channel_has_piship(sales_channel_name: str | None) -> bool:
+    """True if Piship should be computed for this Report's rows.
+
+    No channel selected at all (None) defaults to True — preserving the
+    original always-on behavior for the many Reports uploaded before
+    per-channel Piship gating existed (all of them Shopee, per the actual
+    upload history), so an admin who doesn't bother picking a channel for
+    a Shopee file doesn't silently lose Phí Piship.
+    """
+    if sales_channel_name is None:
+        return True
+    return sales_channel_name.strip().lower() in PISHIP_CHANNEL_NAMES

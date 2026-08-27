@@ -15,7 +15,14 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .derive import compute_discount, compute_piship_fee, compute_platform_fee, compute_voucher, derive_row_fields
+from .derive import (
+    channel_has_piship,
+    compute_discount,
+    compute_piship_fee,
+    compute_platform_fee,
+    compute_voucher,
+    derive_row_fields,
+)
 from .mapping import FIELDS, detect_mapping
 from .parsing import parse_date_value, to_number
 
@@ -124,13 +131,14 @@ def _order_fallback_weight_totals(raw_rows: list[dict], mapping: dict) -> dict:
     return totals
 
 
-def build_dashboard_rows(raw_rows: list[dict], mapping: dict) -> list[dict]:
+def build_dashboard_rows(raw_rows: list[dict], mapping: dict, sales_channel_name: str | None = None) -> list[dict]:
     # "orderId" is validated as required by excel_to_parquet() before this
     # ever runs, so order_col is always truthy here — every row can always
     # be grouped into its real order (Piship/proration below rely on this).
     date_col = mapping.get("date")
     order_col = mapping["orderId"]
     paid_col = mapping.get("buyerPaidAmount")
+    apply_piship = channel_has_piship(sales_channel_name)
     order_paid_totals = _order_paid_totals(raw_rows, mapping)
     order_fallback_weight_totals = {} if paid_col else _order_fallback_weight_totals(raw_rows, mapping)
     seen_order_ids: set = set()
@@ -176,7 +184,7 @@ def build_dashboard_rows(raw_rows: list[dict], mapping: dict) -> list[dict]:
         order_key = row.get(order_col)
         is_first_line_of_order = order_key not in seen_order_ids
         seen_order_ids.add(order_key)
-        piship_fee = compute_piship_fee(is_first_line_of_order)
+        piship_fee = compute_piship_fee(is_first_line_of_order) if apply_piship else 0.0
 
         out.append({
             "date": date,
@@ -229,7 +237,9 @@ def get_original_headers(file_like, sheet_name=0) -> list[str]:
     return headers
 
 
-def excel_to_parquet(file_like, sheet_name=0, mapping_override: dict | None = None) -> tuple[bytes, int, dict]:
+def excel_to_parquet(
+    file_like, sheet_name=0, mapping_override: dict | None = None, sales_channel_name: str | None = None,
+) -> tuple[bytes, int, dict]:
     """Returns (parquet_bytes, row_count, resolved_mapping).
 
     mapping_override, when given, is used as-is instead of running
@@ -237,6 +247,11 @@ def excel_to_parquet(file_like, sheet_name=0, mapping_override: dict | None = No
     takes effect: the Parquet's columns are fixed at conversion time, so
     changing the mapping means reconverting from the original file with the
     admin's chosen mapping, not just editing stored metadata.
+
+    sales_channel_name gates Phí Piship (Shopee-only — see
+    derive.channel_has_piship); None (no channel picked at upload time)
+    defaults to applying it, matching the tool's original Shopee-only
+    behavior.
     """
     raw_rows, headers = read_excel_rows(file_like, sheet_name=sheet_name)
     mapping = dict(mapping_override) if mapping_override else detect_mapping(headers)
@@ -254,7 +269,7 @@ def excel_to_parquet(file_like, sheet_name=0, mapping_override: dict | None = No
     if missing:
         raise MappingError(f"Thiếu cột bắt buộc trong file: {', '.join(missing)}.")
 
-    dashboard_rows = build_dashboard_rows(raw_rows, mapping)
+    dashboard_rows = build_dashboard_rows(raw_rows, mapping, sales_channel_name=sales_channel_name)
     if not dashboard_rows:
         raise MappingError("Không có dòng dữ liệu hợp lệ nào (không đọc được ngày ở bất kỳ dòng nào).")
 

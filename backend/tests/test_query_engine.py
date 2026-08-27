@@ -464,6 +464,40 @@ def test_summary_phi_aff_zero_for_orders_report_missing_order_paid_ratio(
     assert result["kpis"]["phiAff"] == 0
 
 
+def test_cashflow_platform_fee_prorated_and_added_to_orders_file_platform_fee(
+    parquet_path_with_discounts,
+):
+    # TikTok's Cashflow Report also carries a "platformFee" column (Phí
+    # sàn), unlike Shopee's (which only ever has "phiAff") — must be
+    # prorated by orderPaidRatio the same way Phí AFF already is, and
+    # summed with whatever the Orders file itself contributed (0 here,
+    # since parquet_path_with_discounts has no fee columns mapped).
+    cashflow_path = _write_cashflow_parquet([{"orderId": "D1", "phiAff": 2000.0, "platformFee": 3000.0}])
+    try:
+        summary = run_summary_query(parquet_path_with_discounts, cashflow_source=[cashflow_path])
+        assert summary["kpis"]["platformFee"] == 3000
+        assert summary["kpis"]["phiAff"] == 2000
+
+        rows = run_rows_query(parquet_path_with_discounts, page_size=10, cashflow_source=[cashflow_path])
+        by_sku = {r["skuVariant"]: r for r in rows["rows"]}
+        assert by_sku["A100-1"]["platformFee"] == 3000 * 0.4
+        assert by_sku["B200-1"]["platformFee"] == 3000 * 0.6
+    finally:
+        os.remove(cashflow_path)
+
+
+def test_cashflow_platform_fee_absent_when_no_cashflow_report_has_it(parquet_path_with_discounts):
+    # A Shopee-shaped Cashflow Report (only "phiAff", no "platformFee" at
+    # all) must not error — platformFee stays whatever the Orders file
+    # itself contributed (0 here).
+    cashflow_path = _write_cashflow_parquet([{"orderId": "D1", "phiAff": 2000.0}])
+    try:
+        result = run_summary_query(parquet_path_with_discounts, cashflow_source=[cashflow_path])
+        assert result["kpis"]["platformFee"] == 0
+    finally:
+        os.remove(cashflow_path)
+
+
 def test_summary_phi_aff_summed_across_duplicate_orderid_in_multiple_cashflow_reports(
     parquet_path_with_discounts,
 ):

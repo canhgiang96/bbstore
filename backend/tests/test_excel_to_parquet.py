@@ -302,6 +302,17 @@ def test_platform_fee_prorated_and_piship_assigned_to_first_line_only():
     assert single["piship"] == 1620
 
 
+def test_piship_gated_by_sales_channel():
+    # Piship is Shopee's own delivery-partner fee — must not apply when a
+    # non-Shopee channel is selected at upload time (e.g. TikTok, which
+    # has no Piship-equivalent at all, per the user).
+    for channel, expect_piship in [(None, True), ("SHOPEE", True), ("Shopee", True), ("TikTok Shop", False), ("Lazada", False)]:
+        parquet_bytes, _, _ = excel_to_parquet(make_fee_xlsx_bytes(), sales_channel_name=channel)
+        df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
+        first_line_piship = df[(df["orderId"] == "F1") & (df["skuVariant"] == "A100-1")].iloc[0]["piship"]
+        assert first_line_piship == (1620 if expect_piship else 0), f"channel={channel!r}"
+
+
 def test_missing_orderid_column_raises():
     # "Mã đơn hàng" is required: Piship (flat fee per order, first line
     # only) and Voucher/Phí sàn proration both depend on being able to

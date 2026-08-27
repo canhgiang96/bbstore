@@ -154,20 +154,53 @@ hơn:**
 - File chính: `app/mapping.py` (`KEYWORDS`), `app/derive.py`
   (`derive_order_status`), `app/excel_to_parquet.py` (`read_excel_rows`).
 
+## 11. Hỗ trợ file Dòng tiền TikTok Shop (Phí sàn/Phí AFF) + chọn Kênh bán hàng lúc upload
+
+- **File Dòng tiền TikTok** (`income_*.xlsx`, tiếng Việt, đã xác nhận với
+  user dựa trên file thật 2026-08-26/27):
+  - Phí AFF = Hoa hồng liên kết + Hoa hồng liên kết Quảng cáo cửa hàng.
+  - Phí sàn = Tổng phí − Hoa hồng liên kết − Hoa hồng liên kết Quảng cáo
+    cửa hàng − Thuế GTGT do TikTok Shop khấu trừ − Thuế TNCN do TikTok
+    Shop khấu trừ.
+  - Cả 2 đều lưu số âm trong file gốc, đảo dấu thành dương (giống Phí AFF
+    Shopee). Loại trừ các dòng "Loại giao dịch" = "Khoản bồi hoàn của nền
+    tảng" (không phải giao dịch đơn hàng thật).
+  - `app/cashflow_to_parquet.py` giờ dùng `score_headers` (exact-match) thay
+    vì `first_match_mapping` để tránh nhầm "Hoa hồng liên kết" với các cột
+    dài hơn chứa chuỗi này. Cột "platformFee" mới (Phí sàn) chỉ khác 0 với
+    file TikTok — file Shopee (chỉ có "phiAff") vẫn giữ nguyên hành vi cũ.
+  - `app/query_engine.py`'s `_cashflow_agg_join` giờ join+cộng thêm Phí sàn
+    từ Cashflow vào cột "platformFee" (cộng dồn với Phí sàn tính từ file
+    Đơn hàng — mỗi kênh chỉ đóng góp 1 trong 2 nguồn).
+- **Piship chỉ áp dụng cho kênh Shopee**: phát hiện Phí Piship (1.620đ/đơn)
+  trước đây bị tính cho MỌI kênh không phân biệt. Giờ chỉ tính khi Report
+  được gán kênh "Shopee" (không phân biệt hoa/thường) — kênh khác (TikTok,
+  Lazada,...) mặc định KHÔNG tính; không chọn kênh nào thì mặc định vẫn
+  tính (giữ hành vi cũ cho toàn bộ report trước đây, đều là Shopee).
+  `app/derive.py` (`channel_has_piship`, `PISHIP_CHANNEL_NAMES`).
+- **Chọn Kênh bán hàng ngay lúc upload** (thay vì chỉ gán sau khi upload
+  xong): thêm ô chọn kênh vào form upload của 3 tab Đơn hàng/Dòng
+  tiền/Điều chỉnh doanh thu — để backend biết kênh NGAY khi xử lý file
+  (Piship cần biết kênh tại thời điểm này, không thể biết sau). PATCH gán
+  kênh sau khi upload vẫn còn (sửa nhầm), nhưng KHÔNG re-convert lại file
+  — muốn áp dụng lại Piship theo kênh mới phải dùng "Chỉnh cột" để convert
+  lại. File chính: `app/routers/_report_crud.py` (`channel_aware_converter`,
+  `sales_channel_id` tại `POST /api/reports`), `frontend/js/app.js`
+  (`uploadChannelSelectId`, `populateUploadChannelSelects`).
+
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 
-- **File Dòng tiền của TikTok Shop**: Phí sàn/Phí AFF/Piship của TikTok sẽ
-  đến từ file Dòng tiền riêng (giống cách Shopee's Cashflow Report cung
-  cấp Phí AFF qua query-time join) — chưa có mẫu file, cần user cung cấp
-  trước khi làm.
-- **Đa kênh khác (Lazada,...)**: áp dụng cách làm tương tự mục 10 khi có
+- **Đa kênh khác (Lazada,...)**: áp dụng cách làm tương tự mục 10/11 khi có
   mẫu file thật.
+- **Gán lại kênh sau upload không tự re-convert**: nếu đổi kênh của 1
+  Report qua PATCH (không phải lúc upload), Piship của report đó KHÔNG tự
+  cập nhật lại — cần dùng "Chỉnh cột" (PATCH .../mapping) để convert lại.
 
 ## Cache-busting frontend
 
 Mỗi lần sửa `frontend/js/app.js` hoặc `frontend/index.html`, nhớ tăng số
 `?v=N` ở 2 dòng `<script src="js/...">` cuối `index.html` — nếu không trình
-duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=32**.
+duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=33**.
 
 ## 9. Tối ưu hóa code (reuse/simplification/efficiency)
 

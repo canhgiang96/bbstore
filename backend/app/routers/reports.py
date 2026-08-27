@@ -32,6 +32,9 @@ router = create_report_crud_router(
     converter=excel_to_parquet,
     mapping_error=MappingError,
     has_channel=True,
+    # excel_to_parquet accepts sales_channel_name to gate Phí Piship
+    # (Shopee-only) — see derive.channel_has_piship.
+    channel_aware_converter=True,
 )
 
 
@@ -59,11 +62,20 @@ async def update_mapping(report_id: str, body: MappingUpdateRequest, user: dict 
     if not row:
         raise HTTPException(status_code=404, detail="Không tìm thấy Report.")
 
+    # Reconverting must keep gating Phí Piship by this Report's own
+    # already-assigned channel (if any), same as the initial upload did —
+    # otherwise re-mapping a TikTok Report would silently reapply Shopee's
+    # default-on Piship.
+    sales_channel_name = None
+    if row.get("sales_channel_id"):
+        channel_row = await db.pg_select_one("sales_channels", {"id": f"eq.{row['sales_channel_id']}"})
+        sales_channel_name = channel_row["name"] if channel_row else None
+
     with tempfile.NamedTemporaryFile(suffix=".xlsx") as tmp:
         await run_in_threadpool(storage.download_to_path, row["original_xlsx_key"], tmp.name)
         try:
             parquet_bytes, row_count, mapping = await convert_with_backpressure(
-                excel_to_parquet, tmp.name, mapping_override=body.mapping
+                excel_to_parquet, tmp.name, mapping_override=body.mapping, sales_channel_name=sales_channel_name
             )
         except MappingError as e:
             raise HTTPException(status_code=400, detail=str(e))

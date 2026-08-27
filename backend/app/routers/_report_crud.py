@@ -15,9 +15,9 @@ from __future__ import annotations
 import asyncio
 import io
 import uuid
-from typing import Callable
+from typing import Callable, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from starlette.concurrency import run_in_threadpool
 
 from .. import db, storage
@@ -63,17 +63,30 @@ def create_report_crud_router(
     converter: Callable,
     mapping_error: type[Exception],
     has_channel: bool = False,
+    channel_aware_converter: bool = False,
 ) -> APIRouter:
     router = APIRouter(prefix=prefix, tags=[tag])
 
-    async def _process_report(report_id: str, xlsx_bytes: bytes) -> None:
+    async def _process_report(report_id: str, xlsx_bytes: bytes, sales_channel_id: str | None) -> None:
         try:
             # Both are blocking/CPU-bound (openpyxl parsing a potentially
             # huge sheet; boto3's R2 upload) — off the event loop so one big
             # upload doesn't freeze every other concurrent request. The
             # conversion itself is additionally rate-limited process-wide —
             # see _CONVERSION_SEMAPHORE above.
-            parquet_bytes, row_count, mapping = await convert_with_backpressure(converter, io.BytesIO(xlsx_bytes))
+            if channel_aware_converter and sales_channel_id:
+                # Only Orders' converter (excel_to_parquet) actually reads
+                # this — it gates Phí Piship (Shopee-only, see
+                # derive.channel_has_piship). Looked up by id -> name here
+                # so the frontend only ever has to send the id it already
+                # has, same as the post-upload channel PATCH does.
+                channel_row = await db.pg_select_one("sales_channels", {"id": f"eq.{sales_channel_id}"})
+                channel_name = channel_row["name"] if channel_row else None
+                parquet_bytes, row_count, mapping = await convert_with_backpressure(
+                    converter, io.BytesIO(xlsx_bytes), sales_channel_name=channel_name
+                )
+            else:
+                parquet_bytes, row_count, mapping = await convert_with_backpressure(converter, io.BytesIO(xlsx_bytes))
             await run_in_threadpool(
                 storage.upload_bytes, parquet_key_fn(report_id), parquet_bytes, "application/octet-stream"
             )
@@ -99,6 +112,7 @@ def create_report_crud_router(
     async def create_report(
         background_tasks: BackgroundTasks,
         file: UploadFile = File(...),
+        sales_channel_id: Optional[str] = Form(None),
         user: dict = Depends(require_admin),
     ):
         if not file.filename or not file.filename.lower().endswith((".xlsx", ".xls", ".csv")):
@@ -117,20 +131,23 @@ def create_report_crud_router(
         )
 
         name = file.filename.rsplit(".", 1)[0]
-        await db.pg_insert(
-            table,
-            {
-                "id": report_id,
-                "name": name,
-                "original_filename": file.filename,
-                "uploaded_by": user["id"],
-                "status": "processing",
-                "original_xlsx_key": original_key_fn(report_id, file.filename),
-                "file_size_bytes": len(xlsx_bytes),
-            },
-        )
+        insert_data = {
+            "id": report_id,
+            "name": name,
+            "original_filename": file.filename,
+            "uploaded_by": user["id"],
+            "status": "processing",
+            "original_xlsx_key": original_key_fn(report_id, file.filename),
+            "file_size_bytes": len(xlsx_bytes),
+        }
+        # Picking the channel at upload time (rather than only via the
+        # post-upload PATCH) lets channel_aware_converter's business rules
+        # (e.g. Piship gating) apply during the conversion itself.
+        if has_channel and sales_channel_id:
+            insert_data["sales_channel_id"] = sales_channel_id
+        await db.pg_insert(table, insert_data)
 
-        background_tasks.add_task(_process_report, report_id, xlsx_bytes)
+        background_tasks.add_task(_process_report, report_id, xlsx_bytes, sales_channel_id if has_channel else None)
         return ReportCreatedOut(id=report_id, status="processing")
 
     @router.get("", response_model=list[ReportOut])
@@ -149,6 +166,12 @@ def create_report_crud_router(
 
         @router.patch("/{report_id}/channel")
         async def update_channel(report_id: str, body: ChannelUpdateRequest, user: dict = Depends(require_admin)):
+            # Metadata-only tag — does NOT reconvert the file. For
+            # channel_aware_converter routers (Orders), the channel picked
+            # at UPLOAD time is what actually gated Phí Piship during
+            # conversion; changing it here afterwards doesn't retroactively
+            # recompute already-converted rows (re-run PATCH .../mapping to
+            # force a reconversion if that's needed).
             row = await db.pg_select_one(table, {"id": f"eq.{report_id}"})
             if not row:
                 raise HTTPException(status_code=404, detail="Không tìm thấy Report.")
