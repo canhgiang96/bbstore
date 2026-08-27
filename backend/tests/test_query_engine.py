@@ -486,6 +486,26 @@ def test_cashflow_platform_fee_prorated_and_added_to_orders_file_platform_fee(
         os.remove(cashflow_path)
 
 
+def test_cashflow_multiple_rows_for_same_order_are_summed(parquet_path_with_discounts):
+    # A single order can appear on more than one row within the SAME
+    # Cashflow Report file (TikTok's "income" export does this for a
+    # partial return: an original-charge row plus a partial-reversal row
+    # sharing the same Mã đơn hàng) — both must be summed via the join's
+    # GROUP BY "orderId", not just one row taken. Values mirror a real
+    # TikTok order (verified line-by-line against the source formulas
+    # against a real income export, 2026-08-27).
+    cashflow_path = _write_cashflow_parquet([
+        {"orderId": "D1", "phiAff": 0.0, "platformFee": -25602.0},
+        {"orderId": "D1", "phiAff": 26294.0, "platformFee": 52302.0},
+    ])
+    try:
+        summary = run_summary_query(parquet_path_with_discounts, cashflow_source=[cashflow_path])
+        assert summary["kpis"]["phiAff"] == 26294
+        assert summary["kpis"]["platformFee"] == 26700
+    finally:
+        os.remove(cashflow_path)
+
+
 def test_cashflow_platform_fee_absent_when_no_cashflow_report_has_it(parquet_path_with_discounts):
     # A Shopee-shaped Cashflow Report (only "phiAff", no "platformFee" at
     # all) must not error — platformFee stays whatever the Orders file
