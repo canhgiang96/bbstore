@@ -1021,8 +1021,8 @@
   // and overwrites it; fetchAndRenderSummary/DetailTable guard against
   // that too.
   function initDashboardFilters() {
-    el("btnApplyFilter").onclick = () => applyFiltersAndRender();
-    el("btnClearFilter").onclick = () => {
+    el("btnApplyFilter").onclick = () => withButtonLoading(el("btnApplyFilter"), applyFiltersAndRender);
+    el("btnClearFilter").onclick = () => withButtonLoading(el("btnClearFilter"), async () => {
       setTimeFilter("", "", TIME_PRESET_LABELS[""], "");
       el("customFrom").value = "";
       el("customTo").value = "";
@@ -1035,8 +1035,8 @@
       dash.selectedKenhNho.clear();
       el("filterSku").value = "";
       if (dash.lastFacets) renderFacets(dash.lastFacets); // redraw checkboxes as unchecked
-      applyFiltersAndRender();
-    };
+      await applyFiltersAndRender();
+    });
     el("tableSearch").oninput = e => {
       dash.detailSearch = e.target.value;
       dash.detailPage = 1;
@@ -1056,11 +1056,27 @@
     renderGroupByPicker();
   }
 
-  function applyFiltersAndRender() {
+  async function applyFiltersAndRender() {
     dash.detailPage = 1;
     clearGroupState();
-    fetchAndRenderSummary();
-    fetchAndRenderDetailTable();
+    await Promise.all([fetchAndRenderSummary(), fetchAndRenderDetailTable()]);
+  }
+
+  // Shows a spinner + disables the button for the duration of an async
+  // action (e.g. "Tìm kiếm"/"Xóa lọc" while their filtered data loads) so
+  // clicking it doesn't feel unresponsive on a slow query. Restores the
+  // button's exact original content afterward, success or failure.
+  async function withButtonLoading(btn, fn) {
+    const originalHtml = btn.innerHTML;
+    const originalDisabled = btn.disabled;
+    btn.disabled = true;
+    btn.innerHTML = `<span class="btn-spinner"></span>${escapeHtml(btn.textContent.trim())}`;
+    try {
+      await fn();
+    } finally {
+      btn.innerHTML = originalHtml;
+      btn.disabled = originalDisabled;
+    }
   }
 
   async function fetchAndRenderSummary() {

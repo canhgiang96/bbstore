@@ -357,6 +357,14 @@ hơn:**
     (sub-tab + bảng mới), `frontend/js/app.js` (`fetchAndRenderMonthly
     Analysis`, ô nhập trực tiếp `.monthly-expense-input`).
 
+## 17. Spinner khi bấm "Tìm kiếm"/"Xóa lọc"
+
+- Nút "Tìm kiếm" và "Xóa lọc" trên Dashboard giờ hiện vòng tròn xoay +
+  tự vô hiệu hóa trong lúc chờ dữ liệu lọc tải xong, tránh cảm giác bấm
+  không phản hồi khi query chậm. `app.js` (`withButtonLoading()`,
+  `applyFiltersAndRender()` đổi thành `async`/trả về Promise để gọi
+  `await` được), `style.css` (`.btn-spinner`).
+
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 
 - **Đa kênh khác (Lazada,...)**: áp dụng cách làm tương tự mục 10/11 khi có
@@ -366,7 +374,7 @@ hơn:**
 
 Mỗi lần sửa `frontend/js/app.js` hoặc `frontend/index.html`, nhớ tăng số
 `?v=N` ở 2 dòng `<script src="js/...">` cuối `index.html` — nếu không trình
-duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=38**.
+duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=39**.
 
 ## 9. Tối ưu hóa code (reuse/simplification/efficiency)
 
