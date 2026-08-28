@@ -258,6 +258,44 @@ hơn:**
   mới trên Dashboard (giống Kênh bán hàng); `wireNamedListTab()` factory
   dùng chung cho 2 tab named-list.
 
+## 14. Upload chung 1 file cho 31 LVS/HARA/WEBSITE/ZALO
+
+- File `sale_report_*.xlsx` (xác nhận với user 2026-08-28, file thật
+  `sale_report_28_08_2026_927871_1`) gộp cả 4 kênh vào 1 file, đánh dấu
+  từng dòng bằng cột "Kênh bán hàng" (POS/Harasocial/Web/Zalo) — giờ upload
+  được trực tiếp qua tab Đơn hàng như bình thường (không cần tách 4 file,
+  không cần chọn kênh lúc upload — hệ thống tự nhận diện theo cột này,
+  không cần đổi UI upload).
+  - Map: POS→31 LVS, Harasocial→HARA, Web→WEBSITE, chứa "zalo"→ZALO.
+    `app/derive.py` (`normalize_combined_sales_channel`,
+    `COMBINED_SALES_CHANNEL_MAP`). Không nhận diện được (kênh khác) thì
+    giữ nguyên kênh gán lúc upload (như trước giờ).
+  - Piship tự động tắt cho cả 4 kênh này ở từng dòng (không phụ thuộc kênh
+    chọn lúc upload).
+  - **Phát hiện quan trọng khi test bằng file thật**: file này lưu "Số sản
+    phẩm trả"/"Giảm giá"/"Hoàn trả" dưới dạng **số ÂM** (khác quy ước dương
+    của Shopee/TikTok) — đã chuẩn hoá về dương (`abs()`) khi đọc, nếu không
+    sẽ tính sai SL thực (cộng nhầm thay vì trừ) và Doanh thu thuần (cộng
+    giảm giá thay vì trừ).
+  - File này cũng không có "Trạng thái đơn hàng"/"Giá gốc"/"Lý do hủy" —
+    3 field này chuyển từ `required=True` sang required tùy điều kiện (có
+    "Trạng thái đơn hàng" thì vẫn bắt buộc đủ 3, không có thì bắt buộc
+    "Doanh thu" thay "Giá gốc" — xem `app/excel_to_parquet.py`). Không có
+    Trạng thái đơn hàng → mọi dòng mặc định "Hoàn thành" (trừ khi SL hoàn
+    trả cho thấy Hoàn hàng/Hoàn 1 phần) — xác nhận: file dạng này không có
+    khái niệm đơn hủy.
+  - Field mapping trực tiếp theo đúng yêu cầu user (không tính lại qua
+    công thức Shopee): Số lượng=Số sản phẩm, SL hoàn trả=Số sản phẩm trả,
+    Giảm giá=Giảm giá (field mới `discountAmount`), Doanh số=Doanh thu
+    (originalPrice suy ra = Doanh thu/Số lượng khi không có Giá gốc), Doanh
+    số hoàn=Hoàn trả (field mới `refundAmount`, cột mới `hoanAmount` —
+    persist ở Parquet, KPI "hoan" đổi từ tính lại `originalPrice x
+    returnedQty` sang `SUM(hoanAmount)`, có fallback cho Report cũ chưa có
+    cột này).
+  - `app/mapping.py` (field mới `channelRaw`/`discountAmount`/
+    `refundAmount`, keyword mới cho quantity/returnedQty/skuVariant, guard
+    exact-match-only cho 3 field mới tránh nhầm cột dài hơn của Shopee).
+
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 
 - **Đa kênh khác (Lazada,...)**: áp dụng cách làm tương tự mục 10/11 khi có

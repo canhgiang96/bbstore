@@ -22,6 +22,7 @@ from .derive import (
     compute_platform_fee,
     compute_voucher,
     derive_row_fields,
+    normalize_combined_sales_channel,
 )
 from .mapping import FIELDS, detect_mapping
 from .parsing import parse_date_value, to_number
@@ -173,7 +174,18 @@ def build_dashboard_rows(raw_rows: list[dict], mapping: dict, sales_channel_name
             line_weight = derived["quantity"]
             order_paid_ratio = (line_weight / order_total_weight) if order_total_weight else 0.0
 
-        discount = compute_discount(seller_subsidy, derived["quantity"], derived["soLuongThuc"])
+        if mapping.get("discountAmount"):
+            # Already the exact final per-line amount (e.g. the in-house
+            # POS/social/web/Zalo export's "Giảm giá" column, confirmed
+            # with the user 2026-08-28) — used as-is, not re-derived from
+            # an order-level "Người bán trợ giá" the way Shopee's is.
+            # abs(): the source file stores this negative (a reduction),
+            # but "discount" here must be positive — doanhThuThuan = GMV -
+            # discount - voucher subtracts it, so a negative value would
+            # backwards-increase revenue instead of reducing it.
+            discount = abs(to_number(row.get(mapping["discountAmount"])))
+        else:
+            discount = compute_discount(seller_subsidy, derived["quantity"], derived["soLuongThuc"])
         voucher = compute_voucher(shop_voucher, order_paid_ratio, derived["quantity"], derived["soLuongThuc"])
 
         fixed_fee = to_number(row.get(mapping["fixedFee"])) if mapping.get("fixedFee") else 0.0
@@ -181,10 +193,17 @@ def build_dashboard_rows(raw_rows: list[dict], mapping: dict, sales_channel_name
         transaction_fee = to_number(row.get(mapping["transactionFee"])) if mapping.get("transactionFee") else 0.0
         platform_fee = compute_platform_fee(fixed_fee, service_fee, transaction_fee, order_paid_ratio)
 
+        # A row from the combined 31 LVS/HARA/WEBSITE/ZALO file carries its
+        # own real Kênh bán hàng (see normalize_combined_sales_channel) — none of
+        # those 4 have Piship, so a row-level match overrides whatever the
+        # upload-time channel pick (or its absence) would otherwise imply.
+        row_channel = normalize_combined_sales_channel(row.get(mapping["channelRaw"])) if mapping.get("channelRaw") else ""
+        row_apply_piship = channel_has_piship(row_channel) if row_channel else apply_piship
+
         order_key = row.get(order_col)
         is_first_line_of_order = order_key not in seen_order_ids
         seen_order_ids.add(order_key)
-        piship_fee = compute_piship_fee(is_first_line_of_order) if apply_piship else 0.0
+        piship_fee = compute_piship_fee(is_first_line_of_order) if row_apply_piship else 0.0
 
         out.append({
             "date": date,
@@ -214,6 +233,7 @@ def build_dashboard_rows(raw_rows: list[dict], mapping: dict, sales_channel_name
             "returnedQty": derived["returnedQty"],
             "soLuongThuc": derived["soLuongThuc"],
             "doanhSo": derived["doanhSo"],
+            "hoanAmount": derived["hoanAmount"],
             "trangThai": derived["trangThai"],
             "discount": discount,
             "voucher": voucher,
@@ -224,6 +244,16 @@ def build_dashboard_rows(raw_rows: list[dict], mapping: dict, sales_channel_name
             # Phí AFF from Dòng tiền) at query time and prorate them the same
             # way Voucher/Phí sàn already are.
             "orderPaidRatio": order_paid_ratio,
+            # Per-row Kênh bán hàng override — "" (blank) for every channel
+            # except the combined 31 LVS/HARA/WEBSITE/ZALO file, where it
+            # takes priority over the Report's upload-time channel pick at
+            # query time (see query_engine._build_orders_working's COALESCE).
+            # Deliberately NOT named "salesChannel" — that name is reserved
+            # for the query-time-synthesized tag (see
+            # query_engine._channel_tagged_source_sql); reusing it here
+            # would produce two same-named columns in that SELECT *, ... AS
+            # "salesChannel" wrapper.
+            "channelOverride": row_channel,
         })
 
     return out
@@ -267,12 +297,26 @@ def excel_to_parquet(
 
     # Every field marked required=True in mapping.FIELDS feeds a KPI
     # calculation somewhere downstream (orderId -> Piship/proration,
-    # quantity/originalPrice -> Doanh số/GMV, returnedQty -> Doanh số hoàn,
-    # status/cancelReason -> trạng thái classification) — silently
+    # quantity -> Doanh số/GMV, returnedQty -> Doanh số hoàn) — silently
     # defaulting any of these to 0/"" produces confidently wrong numbers
     # instead of an obviously missing one, so the upload is rejected
     # instead of guessed at.
     missing = [f.label for f in FIELDS if f.required and f.key not in mapping]
+    # status/originalPrice/cancelReason are conditionally required instead
+    # of unconditionally (see mapping.FIELDS' comment): a file that tracks
+    # order status at all (Shopee/TikTok-shaped) must also carry the fields
+    # status-based derivation depends on, or cancelled/returned orders would
+    # silently mis-classify. A file with no status column at all (e.g. the
+    # in-house POS/social/web/Zalo export, confirmed with the user
+    # 2026-08-28) has no cancellation concept, but still needs SOME
+    # monetary basis for Doanh số — "revenue" stands in for "originalPrice"
+    # there (see derive_row_fields).
+    if mapping.get("status"):
+        for key, label in [("originalPrice", "Giá gốc"), ("cancelReason", "Lý do hủy")]:
+            if key not in mapping:
+                missing.append(label)
+    elif not mapping.get("revenue"):
+        missing.append("Giá gốc (hoặc Doanh thu, nếu file không theo dõi Trạng thái đơn hàng)")
     if missing:
         raise MappingError(f"Thiếu cột bắt buộc trong file: {', '.join(missing)}.")
 

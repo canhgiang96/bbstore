@@ -13,12 +13,16 @@ from .parsing import to_number
 
 def derive_order_status(
     raw_status: str, cancel_reason: str, so_luong_thuc: float, returned_qty: float,
-    quantity_known: bool = True,
+    quantity_known: bool = True, status_known: bool = True,
 ) -> str:
     status_norm = strip_diacritics(raw_status or "")
     reason_norm = strip_diacritics(cancel_reason or "")
 
-    if "huy" in status_norm:
+    # "huy" detection only applies when there's real status text to read —
+    # a file with no status column at all (e.g. the in-house POS/social/
+    # web/Zalo export, confirmed with the user 2026-08-28: "các dòng trong
+    # file không có đơn hủy") has no cancellation concept to detect at all.
+    if status_known and "huy" in status_norm:
         # "giao hang that bai" is Shopee's phrasing; "giao goi hang that
         # bai" ("delivery of the package failed") is TikTok Shop's.
         failed_delivery = "giao hang that bai" in reason_norm or "giao goi hang that bai" in reason_norm
@@ -28,11 +32,15 @@ def derive_order_status(
     # to 0 and so_luong_thuc is 0 for every row regardless of what really
     # happened, which would otherwise misclassify the whole report as
     # "Hoàn hàng" (zeroing GMV dashboard-wide) instead of falling through
-    # to the status-text-based branches below.
+    # to the status-text-based branches below. This branch (and the next)
+    # are return-quantity-based, independent of whether a status column
+    # exists at all, so they still apply when status_known is False.
     if quantity_known and so_luong_thuc == 0:
         return "Hoàn hàng"
     if returned_qty > 0 and so_luong_thuc > 0:
         return "Hoàn 1 phần"
+    if not status_known:
+        return "Hoàn thành"
     # "hoan thanh" is Shopee's phrasing; "hoan tat" ("Đã hoàn tất") is
     # TikTok Shop's for the same "completed" status.
     if "hoan thanh" in status_norm or "hoan tat" in status_norm:
@@ -59,14 +67,43 @@ def derive_row_fields(row: dict, mapping: dict) -> dict:
 
     quantity_known = bool(mapping.get("quantity"))
     quantity = to_number(get("quantity")) if quantity_known else 0.0
-    original_price = to_number(get("originalPrice")) if mapping.get("originalPrice") else 0.0
-    returned_qty = to_number(get("returnedQty")) if mapping.get("returnedQty") else 0.0
+    if mapping.get("originalPrice"):
+        original_price = to_number(get("originalPrice"))
+    elif mapping.get("revenue") and quantity:
+        # No per-unit price column at all (e.g. the in-house POS/social/
+        # web/Zalo export, confirmed with the user 2026-08-28: it gives a
+        # pre-computed per-line "Doanh thu" instead of "Giá gốc") — infer
+        # an implied unit price so GMV/Giá vốn (which key off originalPrice)
+        # still work; doanhSo = original_price * quantity below then comes
+        # out exactly equal to the raw "Doanh thu" value, matching "Doanh
+        # số = Doanh thu".
+        original_price = to_number(get("revenue")) / quantity
+    else:
+        original_price = 0.0
+    # abs(): Shopee/TikTok always store this as a non-negative count, but
+    # the in-house POS/social/web/Zalo export stores it NEGATIVE instead
+    # (confirmed against real file sale_report_28_08_2026_927871_1,
+    # 2026-08-28 — e.g. "Số sản phẩm trả" = -1 for 1 unit returned).
+    # Normalizing to non-negative here keeps so_luong_thuc's subtraction
+    # below correct regardless of which convention the source file used.
+    returned_qty = abs(to_number(get("returnedQty"))) if mapping.get("returnedQty") else 0.0
     so_luong_thuc = quantity - returned_qty
     doanh_so = original_price * quantity
+    # "Doanh số hoàn" defaults to originalPrice x returnedQty (Shopee/
+    # TikTok, no direct refund-amount column) but prefers a real per-line
+    # refund amount when the file gives one directly (confirmed with the
+    # user 2026-08-28: "Doanh số hoàn = Hoàn trả", not re-derived) — same
+    # abs() normalization as returnedQty above, since the source file
+    # stores "Hoàn trả" negative too.
+    hoan_amount = abs(to_number(get("refundAmount"))) if mapping.get("refundAmount") else original_price * returned_qty
 
     status = str(get("status", "") or "").strip()
     cancel_reason = str(get("cancelReason", "") or "").strip()
-    trang_thai = derive_order_status(status, cancel_reason, so_luong_thuc, returned_qty, quantity_known=quantity_known)
+    status_known = bool(mapping.get("status"))
+    trang_thai = derive_order_status(
+        status, cancel_reason, so_luong_thuc, returned_qty,
+        quantity_known=quantity_known, status_known=status_known,
+    )
 
     return {
         "skuVariant": sku_variant,
@@ -76,6 +113,7 @@ def derive_row_fields(row: dict, mapping: dict) -> dict:
         "returnedQty": returned_qty,
         "soLuongThuc": so_luong_thuc,
         "doanhSo": doanh_so,
+        "hoanAmount": hoan_amount,
         "status": status,
         "cancelReason": cancel_reason,
         "trangThai": trang_thai,
@@ -146,3 +184,35 @@ def channel_has_piship(sales_channel_name: str | None) -> bool:
     if sales_channel_name is None:
         return True
     return sales_channel_name.strip().lower() in PISHIP_CHANNEL_NAMES
+
+
+# 31 LVS/HARA/WEBSITE/ZALO share one combined "sale_report_*.xlsx" export
+# (confirmed with the user 2026-08-28, real file
+# sale_report_28_08_2026_927871_1) with a per-row "Kênh bán hàng" column
+# whose raw values are the exact keys below — mapping them here lets all 4
+# be uploaded as a single Report instead of 4 separate ones, with each
+# row's real Kênh bán hàng recovered at conversion time (see
+# excel_to_parquet.build_dashboard_rows) rather than needing one upload-
+# time channel pick per file.
+COMBINED_SALES_CHANNEL_MAP = {
+    "harasocial": "HARA",
+    "pos": "31 LVS",
+    "web": "WEBSITE",
+}
+
+
+def normalize_combined_sales_channel(raw_value: str) -> str:
+    """Maps one row's raw "Kênh bán hàng" text (from the combined 31 LVS/
+    HARA/WEBSITE/ZALO file) to the matching Kênh bán hàng name used
+    elsewhere in the system, or "" when the value isn't one of the known
+    ones (e.g. blank, or a file that doesn't use this scheme at all —
+    Piship/other per-channel gating then falls back to the Report's own
+    upload-time channel pick, see query_engine._build_orders_working's
+    COALESCE).
+    """
+    norm = strip_diacritics(raw_value or "").strip()
+    if not norm:
+        return ""
+    if "zalo" in norm:
+        return "ZALO"
+    return COMBINED_SALES_CHANNEL_MAP.get(norm, "")

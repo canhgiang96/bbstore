@@ -416,6 +416,18 @@ def _build_orders_working(
     sku_id_col = 'o."skuId"' if "skuId" in available else "NULL"
     creator_handle_col = 'o."creatorHandle"' if "creatorHandle" in available else "NULL"
     content_channel_col = 'o."contentChannel"' if "contentChannel" in available else "NULL"
+    # "hoanAmount" is persisted at conversion time for every Orders Report
+    # going forward (originalPrice x returnedQty by default, or a real
+    # per-line refund amount when the file gives one directly — see
+    # excel_to_parquet.build_dashboard_rows/derive.derive_row_fields) — a
+    # Report converted before this existed falls back to recomputing the
+    # old formula here, same backward-compat pattern as discount/voucher.
+    hoan_amount_col = '"hoanAmount"' if "hoanAmount" in available else '("originalPrice" * "returnedQty")'
+    # "channelOverride" — a per-row Kênh bán hàng recovered from the
+    # combined 31 LVS/HARA/WEBSITE/ZALO file's own "Kênh bán hàng" column
+    # (see derive.normalize_combined_sales_channel); "" for every other
+    # channel, and simply absent (pre-feature Reports) most of the time.
+    channel_override_col = '"channelOverride"' if "channelOverride" in available else "NULL"
 
     combo_join_sql, combo_params, sku_variant_expr, ratio_expr, slot_expr = _combo_join(combo_source)
     cashflow_join_sql, cashflow_params, aff_expr, cashflow_platform_fee_expr = _cashflow_agg_join(
@@ -519,11 +531,12 @@ def _build_orders_working(
           {item_group_expr} AS "phanLoaiMuc",
           {product_type_expr} AS "phanLoaiSp",
           o."soLuongThuc" * {gia_von_expr} AS "giaVon",
+          {hoan_amount_col} * {ratio_expr} AS "hoanAmount",
           {gmv_row_expr} AS "gmv",
           {doanh_thu_thuan_row_expr} AS "doanhThuThuan",
           {nmv_row_expr} AS "nmv",
           {loi_nhuan_gop_row_expr} AS "loiNhuanGop",
-          o."salesChannel" AS "salesChannel",
+          COALESCE(NULLIF({channel_override_col}, ''), o."salesChannel") AS "salesChannel",
           {kenh_nho_expr} AS "kenhNho"
         FROM (SELECT * FROM ({channel_source_sql}) t {date_filter_sql}) o
         {combo_join_sql}
@@ -596,7 +609,7 @@ def run_summary_query(
               COALESCE(SUM(CASE WHEN "trangThai" IN {GMV_STATUSES_SQL} THEN "originalPrice" * "soLuongThuc" ELSE 0 END), 0) AS gmv,
               COALESCE(SUM(CASE WHEN "trangThai" = 'Hủy chưa XK' THEN "doanhSo" ELSE 0 END), 0) AS huy_chua_xk,
               COALESCE(SUM(CASE WHEN "trangThai" = 'Hủy sau XK' THEN "doanhSo" ELSE 0 END), 0) AS huy_sau_xk,
-              COALESCE(SUM("originalPrice" * "returnedQty"), 0) AS hoan,
+              COALESCE(SUM("hoanAmount"), 0) AS hoan,
               COALESCE(SUM(CASE WHEN "trangThai" IN {GMV_STATUSES_SQL} THEN "discount" ELSE 0 END), 0) AS discount,
               COALESCE(SUM(CASE WHEN "trangThai" IN {GMV_STATUSES_SQL} THEN "voucher" ELSE 0 END), 0) AS voucher,
               COALESCE(SUM("platformFee"), 0) AS platform_fee,

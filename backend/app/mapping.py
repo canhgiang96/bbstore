@@ -40,11 +40,23 @@ FIELDS = [
     Field("quantity", "Số lượng", required=True),
     Field("price", "Đơn giá"),
     Field("revenue", "Doanh thu"),
-    Field("status", "Trạng thái đơn hàng", required=True),
+    # status/originalPrice/cancelReason are no longer unconditionally
+    # required=True here — a file with no order-status concept at all (e.g.
+    # the in-house POS/social/web/Zalo export, confirmed with the user
+    # 2026-08-28: "các dòng trong file không có đơn hủy") has none of these
+    # three columns, yet is still a valid Orders upload. The real
+    # requiredness is enforced conditionally in excel_to_parquet() instead:
+    # when "status" IS mapped (Shopee/TikTok-shaped), originalPrice/
+    # cancelReason are still required (status-based derivation depends on
+    # them); when it isn't, "revenue" becomes the required stand-in for
+    # originalPrice instead (see derive_row_fields' fallback) and
+    # cancelReason is simply unused (every row defaults to "Hoàn thành" —
+    # see derive_order_status's status_known param).
+    Field("status", "Trạng thái đơn hàng"),
     Field("orderId", "Mã đơn hàng", required=True),
     Field("skuVariant", "SKU phân loại hàng"),
-    Field("originalPrice", "Giá gốc", required=True),
-    Field("cancelReason", "Lý do hủy", required=True),
+    Field("originalPrice", "Giá gốc"),
+    Field("cancelReason", "Lý do hủy"),
     Field("returnedQty", "SL sản phẩm hoàn trả", required=True),
     Field("sellerSubsidy", "Người bán trợ giá"),
     Field("shopVoucher", "Mã giảm giá của Shop"),
@@ -62,6 +74,16 @@ FIELDS = [
     Field("skuId", "SKU ID"),
     Field("creatorHandle", "Người sáng tạo (Handle)"),
     Field("contentChannel", "Kênh nội dung"),
+    # In-house channels (31 LVS/HARA/WEBSITE/ZALO) share one combined file
+    # structure and mark each row's channel with this column — confirmed
+    # with the user 2026-08-28 (real file sale_report_28_08_2026_927871_1)
+    # so all 4 can be uploaded together as one Report instead of 4 separate
+    # ones. Optional — feeds a per-row Kênh bán hàng override (see
+    # derive.normalize_inhouse_channel / query_engine._build_orders_working)
+    # instead of the usual per-Report sales_channel_id tagging.
+    Field("channelRaw", "Kênh bán hàng (trong file)"),
+    Field("discountAmount", "Giảm giá (số tiền, đã tính sẵn theo dòng)"),
+    Field("refundAmount", "Số tiền hoàn trả (đã tính sẵn theo dòng)"),
 ]
 
 KEYWORDS = {
@@ -74,15 +96,15 @@ KEYWORDS = {
     "product": ["ten san pham", "ten mat hang", "ten hang", "san pham", "mat hang", "product", "item"],
     "category": ["ten phan loai hang", "danh muc san pham", "danh muc", "phan loai hang", "phan loai", "loai", "nhom", "category"],
     "customer": ["ten khach hang", "khach hang", "khach", "customer"],
-    "quantity": ["so luong san pham", "so luong", "qty", "quantity", "sl"],
+    "quantity": ["so luong san pham", "so san pham", "so luong", "qty", "quantity", "sl"],
     "price": ["gia uu dai", "don gia", "gia ban", "gia", "price", "unit price"],
     "revenue": ["tong gia tri don hang", "tong so tien thanh toan", "doanh thu", "thanh tien", "tong tien", "gia tri don hang", "thanh toan", "revenue", "total", "amount", "gia tri"],
     "status": ["trang thai don hang", "trang thai", "order status", "status"],
     "orderId": ["ma don hang", "order id"],
-    "skuVariant": ["sku phan loai hang", "sku phan loai", "seller sku"],
+    "skuVariant": ["sku phan loai hang", "sku phan loai", "seller sku", "sku"],
     "originalPrice": ["gia goc", "sku unit original price"],
     "cancelReason": ["ly do huy", "cancel reason"],
-    "returnedQty": ["so luong san pham duoc hoan tra", "so luong hoan tra", "sl hoan tra", "sku quantity of return"],
+    "returnedQty": ["so luong san pham duoc hoan tra", "so san pham tra", "so luong hoan tra", "sl hoan tra", "sku quantity of return"],
     "sellerSubsidy": ["nguoi ban tro gia", "sku seller discount"],
     "shopVoucher": ["ma giam gia cua shop", "ma giam gia shop"],
     "buyerPaidAmount": ["so tien nguoi mua thanh toan"],
@@ -92,6 +114,9 @@ KEYWORDS = {
     "skuId": ["sku id"],
     "creatorHandle": ["creator handle"],
     "contentChannel": ["order channel"],
+    "channelRaw": ["kenh ban hang"],
+    "discountAmount": ["giam gia"],
+    "refundAmount": ["hoan tra"],
 }
 
 IDENTIFIER_PREFIX = re.compile(r"^(sku|ma|id)\b")
@@ -160,9 +185,21 @@ def first_match_mapping(headers: list[str], keywords: dict[str, list[str]]) -> d
     return result
 
 
+# These 3 fields' keywords are short/generic enough to falsely substring-
+# match an unrelated, longer real header — "giam gia" (discountAmount)
+# inside "Mã giảm giá của Shop" (shopVoucher's actual header), "hoan tra"
+# (refundAmount) inside "Số lượng sản phẩm được hoàn trả" (returnedQty's).
+# Require an exact normalized match (score >= 100) for these, or don't map
+# at all, rather than risk binding to the wrong column on a Shopee/TikTok
+# file that happens to contain the substring.
+EXACT_MATCH_ONLY_FIELDS = {"discountAmount", "refundAmount", "channelRaw"}
+
+
 def _detect_mapping_score_adjust(field, header, normalized_header, score):
     if field in NAME_LIKE_FIELDS and IDENTIFIER_PREFIX.match(normalized_header):
         return score - 50
+    if field in EXACT_MATCH_ONLY_FIELDS and score < 100:
+        return 0
     return score
 
 

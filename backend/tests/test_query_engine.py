@@ -384,6 +384,25 @@ def test_rows_old_schema_report_without_discount_columns_returns_zero(old_schema
     assert result["rows"][0]["piship"] == 0
 
 
+def test_summary_hoan_falls_back_to_original_price_times_returned_qty_for_old_schema_report():
+    # A Report converted before "hoanAmount" existed (no such column at
+    # all) — the "hoan" KPI must fall back to recomputing the old formula
+    # from originalPrice/returnedQty instead of erroring on a missing
+    # column, same backward-compat pattern as discount/voucher.
+    rows = [
+        {"date": datetime(2026, 2, 1), "orderId": "OLD1", "sku": "X1",
+         "skuVariant": "X1-1", "product": "SP X", "category": "Áo", "customer": "(Không rõ)",
+         "quantity": 4.0, "returnedQty": 4.0, "soLuongThuc": 0.0, "price": 0.0, "originalPrice": 20000.0,
+         "revenue": 0.0, "doanhSo": 80000.0, "status": "Hoàn hàng", "trangThai": "Hoàn hàng"},
+    ]
+    path = _write_raw_parquet(rows)
+    try:
+        result = run_summary_query(path)
+        assert result["kpis"]["hoan"] == 80000  # 20000 * 4, recomputed
+    finally:
+        os.remove(path)
+
+
 def test_summary_mixed_old_and_new_schema_reports_via_union_by_name(
     old_schema_parquet_path, parquet_path_with_discounts
 ):
@@ -1059,6 +1078,35 @@ def test_grouped_rows_by_sales_channel(channel_tagged_reports):
     assert set(by_group) == {"Shopee", "Lazada", ""}
     assert by_group["Shopee"]["rowCount"] == 1
     assert by_group[""]["rowCount"] == 1  # the untagged Report
+
+
+def test_channel_override_wins_over_report_level_channel_tag():
+    # The combined 31 LVS/HARA/WEBSITE/ZALO file (see
+    # excel_to_parquet.build_dashboard_rows) stores each row's real Kênh
+    # bán hàng in "channelOverride" — this must win over whatever channel
+    # (or lack of one) the Report itself was tagged with at upload time,
+    # since one Report can genuinely mix several of these 4 channels.
+    rows = [
+        {"date": datetime(2026, 2, 1), "orderId": "C1", "sku": "X1",
+         "skuVariant": "X1-1", "product": "SP X", "category": "Áo", "customer": "(Không rõ)",
+         "quantity": 1.0, "returnedQty": 0.0, "soLuongThuc": 1.0, "price": 0.0, "originalPrice": 10000.0,
+         "revenue": 0.0, "doanhSo": 10000.0, "status": "Hoàn thành", "trangThai": "Hoàn thành",
+         "channelOverride": "HARA"},
+        {"date": datetime(2026, 2, 1), "orderId": "C2", "sku": "X1",
+         "skuVariant": "X1-1", "product": "SP X", "category": "Áo", "customer": "(Không rõ)",
+         "quantity": 1.0, "returnedQty": 0.0, "soLuongThuc": 1.0, "price": 0.0, "originalPrice": 10000.0,
+         "revenue": 0.0, "doanhSo": 10000.0, "status": "Hoàn thành", "trangThai": "Hoàn thành",
+         "channelOverride": ""},  # blank -> falls back to the Report-level tag
+    ]
+    path = _write_raw_parquet(rows)
+    try:
+        # Report-level tag says "Shopee" — only C2 (blank override) should
+        # inherit it; C1's "HARA" override must win regardless.
+        result = run_rows_query([path], page_size=10, channel_source={"Shopee": [path]})
+        by_order = {r["orderId"]: r["salesChannel"] for r in result["rows"]}
+        assert by_order == {"C1": "HARA", "C2": "Shopee"}
+    finally:
+        os.remove(path)
 
 
 # ---- "Kênh nhỏ" (LIVE/VIDEO/PSA/AFF) classification ----

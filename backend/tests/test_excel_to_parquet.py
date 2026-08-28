@@ -354,8 +354,59 @@ def test_missing_required_column_lists_all_missing_fields():
         assert False, "expected MappingError"
     except MappingError as e:
         msg = str(e)
-        for label in ["Mã đơn hàng", "Số lượng", "Giá gốc", "SL sản phẩm hoàn trả", "Trạng thái đơn hàng", "Lý do hủy"]:
+        for label in ["Mã đơn hàng", "Số lượng", "SL sản phẩm hoàn trả"]:
             assert label in msg, f"expected {label!r} in error message: {msg!r}"
+        # No "status" mapped at all -> falls to the revenue-or-originalPrice
+        # check (see test_..._when_status_absent below), not the Shopee/
+        # TikTok-shaped Trạng thái/Lý do hủy requirement.
+        assert "Giá gốc (hoặc Doanh thu" in msg
+
+
+def test_missing_original_price_and_cancel_reason_required_when_status_mapped():
+    # A Shopee/TikTok-shaped file (tracks order status) must still carry
+    # originalPrice/cancelReason — status-based derivation depends on them,
+    # so silently defaulting them would mis-classify cancelled/returned
+    # orders. Confirmed with the user 2026-08-28 alongside the new
+    # no-status in-house/POS file shape that relaxed these two.
+    try:
+        excel_to_parquet(make_xlsx_bytes(), mapping_override={
+            "date": "Ngày đặt hàng", "orderId": "Mã đơn hàng", "quantity": "Số lượng",
+            "returnedQty": "Số lượng sản phẩm được hoàn trả", "status": "Trạng Thái Đơn Hàng",
+        })
+        assert False, "expected MappingError"
+    except MappingError as e:
+        msg = str(e)
+        assert "Giá gốc" in msg
+        assert "Lý do hủy" in msg
+
+
+def test_original_price_not_required_when_status_absent_but_revenue_mapped():
+    # The in-house POS/social/web/Zalo file shape (no Trạng thái đơn hàng,
+    # no Giá gốc — confirmed with the user 2026-08-28) must still convert
+    # successfully when "Doanh thu" is mapped instead.
+    parquet_bytes, row_count, mapping = excel_to_parquet(make_xlsx_bytes(), mapping_override={
+        "date": "Ngày đặt hàng", "orderId": "Mã đơn hàng", "quantity": "Số lượng",
+        "returnedQty": "Số lượng sản phẩm được hoàn trả", "revenue": "Giá gốc",
+    })
+    assert row_count > 0
+    assert "status" not in mapping
+    assert "originalPrice" not in mapping
+
+    df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
+    by_order = df.set_index("orderId")
+    # No status column at all -> "huỷ"/"đang giao" text-detection never
+    # fires (O1/O2's real "Đã hủy" status text is simply never read), but
+    # the return-quantity-based branches are still independent of status
+    # and still apply: O3 (returnedQty==quantity) -> "Hoàn hàng", O4
+    # (partial return) -> "Hoàn 1 phần", everything else -> "Hoàn thành"
+    # (no cancellation concept for this file shape — see
+    # derive_order_status's status_known param).
+    assert by_order.loc["O1", "trangThai"] == "Hoàn thành"
+    assert by_order.loc["O3", "trangThai"] == "Hoàn hàng"
+    assert by_order.loc["O4", "trangThai"] == "Hoàn 1 phần"
+    # No originalPrice mapped, but revenue is -> doanhSo falls back to the
+    # raw "Doanh thu" (here "Giá gốc") value directly, not 0.
+    assert by_order.loc["O1", "doanhSo"] == 100000  # ROWS[0]'s "Giá gốc" value
 
 
 def test_voucher_and_platform_fee_fall_back_to_quantity_share_when_buyerpaidamount_not_mapped():
@@ -465,3 +516,86 @@ def test_sku_id_absent_when_column_not_in_file():
     assert "skuId" not in mapping
     df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
     assert (df["skuId"] == "").all()
+
+
+# ---- Combined 31 LVS/HARA/WEBSITE/ZALO in-house file (real headers/values
+# confirmed against sale_report_28_08_2026_927871_1.xlsx, 2026-08-28) — one
+# file mixes all 4 channels, marked per-row by "Kênh bán hàng", and has no
+# Trạng thái/Giá gốc/Lý do hủy at all. Also the real source of the
+# negative-sign discovery: "Số sản phẩm trả"/"Giảm giá"/"Hoàn trả" are all
+# stored NEGATIVE in this file, unlike Shopee/TikTok's positive convention.
+COMBINED_CHANNEL_HEADERS = [
+    "Ngày", "Kênh bán hàng", "SKU", "Mã đơn hàng", "Tên khách hàng",
+    "Số sản phẩm", "Số sản phẩm trả", "Doanh thu", "Giảm giá", "Hoàn trả",
+]
+COMBINED_CHANNEL_ROWS = [
+    # POS -> 31 LVS, no return, no discount.
+    ["2026-08-01", "POS", "A100-1", "P1", "Chị A", 6, 0, 3894000, 0, 0],
+    # Harasocial -> HARA, discount stored negative.
+    ["2026-08-02", "Harasocial", "B200-1", "P2", "Chị B", 10, 0, 6490000, -1947000, 0],
+    # Web -> WEBSITE.
+    ["2026-08-03", "Web", "C300-1", "P3", "Chị C", 2, 0, 1058000, -529000, 0],
+    # Zalo (lowercase "zalo" anywhere in the value) -> ZALO, full return:
+    # both "Số sản phẩm trả" and "Hoàn trả" stored negative.
+    ["2026-08-04", "Zalo", "D400-1", "P4", "Chị D", 1, -1, 1490000, 0, -1490000],
+]
+
+
+def make_combined_channel_xlsx_bytes():
+    wb = Workbook()
+    ws = wb.active
+    ws.append(COMBINED_CHANNEL_HEADERS)
+    for r in COMBINED_CHANNEL_ROWS:
+        ws.append(r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
+def test_combined_channel_file_maps_and_converts():
+    parquet_bytes, row_count, mapping = excel_to_parquet(make_combined_channel_xlsx_bytes())
+    assert row_count == 4
+    assert mapping["channelRaw"] == "Kênh bán hàng"
+    assert mapping["discountAmount"] == "Giảm giá"
+    assert mapping["refundAmount"] == "Hoàn trả"
+    assert "status" not in mapping
+    assert "originalPrice" not in mapping
+
+
+def test_combined_channel_row_maps_to_correct_sales_channel_and_gates_piship():
+    parquet_bytes, _, _ = excel_to_parquet(make_combined_channel_xlsx_bytes())
+    df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
+    by_order = df.set_index("orderId")
+
+    assert by_order.loc["P1", "channelOverride"] == "31 LVS"
+    assert by_order.loc["P2", "channelOverride"] == "HARA"
+    assert by_order.loc["P3", "channelOverride"] == "WEBSITE"
+    assert by_order.loc["P4", "channelOverride"] == "ZALO"
+    # None of the 4 combined channels have Piship — must be gated off even
+    # though no upload-time channel was picked (sales_channel_name=None
+    # would otherwise default Piship on, see channel_has_piship).
+    assert (df["piship"] == 0).all()
+
+
+def test_combined_channel_negative_sign_convention_normalized_to_positive():
+    # "Số sản phẩm trả"/"Giảm giá"/"Hoàn trả" are stored NEGATIVE in this
+    # file (confirmed against the real export) — must be normalized to
+    # positive, matching Shopee/TikTok's convention, not passed through
+    # as-is (a raw negative "SL hoàn trả" would corrupt so_luong_thuc's
+    # subtraction, and a raw negative discount would backwards-increase
+    # doanh thu thuần instead of reducing it).
+    parquet_bytes, _, _ = excel_to_parquet(make_combined_channel_xlsx_bytes())
+    df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
+    by_order = df.set_index("orderId")
+
+    p2 = by_order.loc["P2"]
+    assert p2["discount"] == 1947000  # positive, not -1947000
+    assert p2["doanhSo"] == 6490000  # = raw "Doanh thu", matching Doanh số = Doanh thu
+
+    p4 = by_order.loc["P4"]
+    assert p4["returnedQty"] == 1  # abs(-1), not -1
+    assert p4["soLuongThuc"] == 0  # quantity(1) - returnedQty(1) -> fully returned
+    assert p4["trangThai"] == "Hoàn hàng"  # return-quantity branch, independent of status_known
+    assert p4["hoanAmount"] == 1490000  # abs(-1490000), not -1490000
+
