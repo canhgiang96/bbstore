@@ -476,8 +476,17 @@ def _build_orders_working(
     # columns over any filtered/grouped subset always reconciles with the
     # KPI cards for that same subset. Only GMV-status rows count towards
     # GMV/discount/voucher/Giá vốn here (same CASE-WHEN scoping as the KPI
-    # totals); Phí sàn/Piship/Phí AFF are NOT status-scoped (piship already
-    # excludes "Hủy chưa XK" via its own CASE above), matching the KPIs.
+    # totals) — scoped_discount_row_expr/scoped_voucher_row_expr/
+    # scoped_gia_von_row_expr below are ALSO what gets persisted as the
+    # "discount"/"voucher"/"giaVon" columns themselves (not just used
+    # inline here), so a cancelled/returned order's Detail-table row shows
+    # 0 for these too, matching the KPI cards exactly instead of only
+    # matching by coincidence when every visible row happens to be
+    # GMV-status (bug found via a real cross-check, 2026-08-29: a "Hủy
+    # chưa XK" order with a nonzero Người bán trợ giá used to still count
+    # towards the Detail table's Giảm giá sum/export/Group theo total).
+    # Phí sàn/Piship/Phí AFF are NOT status-scoped (piship already excludes
+    # "Hủy chưa XK" via its own CASE above), matching the KPIs.
     piship_row_expr = (
         f"CASE WHEN ({slot_expr} IS NULL OR {slot_expr} = 1) AND o.\"trangThai\" != 'Hủy chưa XK' "
         f"THEN {piship_col} ELSE 0 END"
@@ -522,15 +531,15 @@ def _build_orders_working(
           o."doanhSo" * {ratio_expr} AS "doanhSo",
           o."status" AS "status",
           o."trangThai" AS "trangThai",
-          {discount_col} * {ratio_expr} AS "discount",
-          {voucher_col} * {ratio_expr} AS "voucher",
+          {scoped_discount_row_expr} AS "discount",
+          {scoped_voucher_row_expr} AS "voucher",
           {combined_platform_fee_col} * {ratio_expr} AS "platformFee",
           CASE WHEN ({slot_expr} IS NULL OR {slot_expr} = 1) AND o."trangThai" != 'Hủy chưa XK' THEN {piship_col} ELSE 0 END AS "piship",
           ({aff_expr}) * {ratio_expr} AS "phiAff",
           {warehouse_expr} AS "phanLoaiKho",
           {item_group_expr} AS "phanLoaiMuc",
           {product_type_expr} AS "phanLoaiSp",
-          o."soLuongThuc" * {gia_von_expr} AS "giaVon",
+          {scoped_gia_von_row_expr} AS "giaVon",
           {hoan_amount_col} * {ratio_expr} AS "hoanAmount",
           {gmv_row_expr} AS "gmv",
           {doanh_thu_thuan_row_expr} AS "doanhThuThuan",

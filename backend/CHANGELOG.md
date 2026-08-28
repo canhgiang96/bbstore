@@ -365,6 +365,25 @@ hơn:**
   `applyFiltersAndRender()` đổi thành `async`/trả về Promise để gọi
   `await` được), `style.css` (`.btn-spinner`).
 
+## 18. Fix: Giảm giá/Voucher/Giá vốn ở tab Dữ liệu chi tiết không khớp Tổng quan
+
+- **Bug thật, phát hiện qua user cross-check 2026-08-29**: KPI "Giảm giá"/
+  "Voucher"/"Giá vốn" ở tab Tổng quan chỉ tính cho đơn thuộc nhóm trạng
+  thái GMV (Hoàn thành/Đang giao/Hoàn 1 phần) — đúng như thiết kế. Nhưng
+  3 cột "Giảm giá"/"Voucher"/"Giá vốn" ở tab Dữ liệu chi tiết (bảng phẳng,
+  Group theo, và Xuất Excel) lại KHÔNG lọc theo trạng thái này — một đơn
+  "Hủy chưa XK" có Người bán trợ giá/Giá vốn khác 0 vẫn cộng vào tổng ở
+  tab chi tiết dù không cộng vào KPI Tổng quan → 2 tab ra số khác nhau
+  nếu Report có đơn hủy/hoàn kèm giảm giá.
+  - Đã sửa: 3 cột này giờ dùng đúng công thức đã lọc theo trạng thái
+    (vốn đã có sẵn, dùng cho công thức NMV/Lợi nhuận gộp nội bộ, nhưng
+    trước đây không được gán cho chính 3 cột này). Đơn không thuộc nhóm
+    GMV giờ hiện 0 ở cả Giảm giá/Voucher/Giá vốn trong Dữ liệu chi tiết,
+    khớp chính xác với Tổng quan (đã verify bằng dữ liệu thật + test).
+  - `app/query_engine.py` (`_build_orders_working`'s cột `discount`/
+    `voucher`/`giaVon` đổi sang dùng `scoped_discount_row_expr`/
+    `scoped_voucher_row_expr`/`scoped_gia_von_row_expr`).
+
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 
 - **Đa kênh khác (Lazada,...)**: áp dụng cách làm tương tự mục 10/11 khi có

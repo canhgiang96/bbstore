@@ -347,6 +347,65 @@ def test_summary_nmv_further_nets_out_platform_fee_piship_and_phi_aff(parquet_pa
     assert kpis["nmv"] == 334500 - 0 - 1620 - 0
 
 
+CANCELLED_DISCOUNT_HEADERS = HEADERS + ["Người bán trợ giá", "Mã giảm giá của Shop"]
+
+CANCELLED_DISCOUNT_ROWS = [
+    # Cancelled before shipping, but still carries a nonzero Người bán trợ
+    # giá/Mã giảm giá của Shop in the source file.
+    ["C1", "2026-02-01 00:01", "Đã hủy", "Người mua đổi ý", "A100-1", "SP A", "Áo", 100000, 2, 0, 20000, 5000],
+    ["C2", "2026-02-02 09:00", "Hoàn thành", "", "B200-1", "SP B", "Quần", 50000, 1, 0, 5000, 1000],
+]
+
+
+@pytest.fixture
+def parquet_path_with_cancelled_discount():
+    wb = Workbook()
+    ws = wb.active
+    ws.append(CANCELLED_DISCOUNT_HEADERS)
+    for r in CANCELLED_DISCOUNT_ROWS:
+        ws.append(r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    parquet_bytes, row_count, mapping = excel_to_parquet(buf)
+    assert row_count == 2
+
+    fd, path = tempfile.mkstemp(suffix=".parquet")
+    with os.fdopen(fd, "wb") as f:
+        f.write(parquet_bytes)
+    yield path
+    os.remove(path)
+
+
+def test_discount_voucher_gia_von_zeroed_for_non_gmv_status_rows(parquet_path_with_cancelled_discount):
+    # Bug found via a real user cross-check (2026-08-29): the Detail
+    # table's "discount"/"voucher"/"giaVon" columns used to stay unscoped
+    # by trạng thái, so a cancelled order's nonzero Người bán trợ giá still
+    # counted towards the Detail table's sum/export/Group theo total even
+    # though the Overview KPI card correctly excluded it — the two views
+    # disagreed. Both must now show 0 for the cancelled row.
+    result = run_rows_query(parquet_path_with_cancelled_discount, page_size=10)
+    by_order = {r["orderId"]: r for r in result["rows"]}
+    assert by_order["C1"]["trangThai"] == "Hủy chưa XK"
+    assert by_order["C1"]["discount"] == 0
+    assert by_order["C1"]["voucher"] == 0
+    assert by_order["C2"]["discount"] == 5000  # (5000 / qty 1) * soLuongThuc 1
+    assert by_order["C2"]["trangThai"] == "Hoàn thành"
+
+
+def test_detail_table_discount_sum_reconciles_with_overview_kpi(parquet_path_with_cancelled_discount):
+    summary = run_summary_query(parquet_path_with_cancelled_discount)
+    rows_result = run_rows_query(parquet_path_with_cancelled_discount, page_size=10)
+    grouped = run_grouped_rows_query(parquet_path_with_cancelled_discount, group_by="orderId", page_size=10)
+
+    detail_sum = sum(r["discount"] for r in rows_result["rows"])
+    grouped_sum = sum(r["discount"] for r in grouped["rows"])
+
+    assert summary["kpis"]["discount"] == detail_sum == grouped_sum
+    assert summary["kpis"]["discount"] > 0  # sanity: not vacuously true because everything's 0
+
+
 def _write_raw_parquet(rows: list[dict]) -> str:
     """Builds a Parquet file directly (bypassing excel_to_parquet) so the
     schema has exactly the given columns — used to simulate a Report that
