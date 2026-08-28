@@ -18,6 +18,7 @@ import tempfile
 import uuid
 from typing import Callable, Optional
 
+import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from starlette.concurrency import run_in_threadpool
 
@@ -154,7 +155,18 @@ def create_report_crud_router(
 
     @router.get("", response_model=list[ReportOut])
     async def list_reports(user: dict = Depends(get_current_user)):
-        rows = await db.pg_select(table, {"select": list_fields, "order": "uploaded_at.desc"})
+        try:
+            rows = await db.pg_select(table, {"select": list_fields, "order": "uploaded_at.desc"})
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code != 400 or "locked" not in list_fields:
+                raise
+            # "locked" is a recently-added column — a deploy can land before
+            # its Supabase migration has actually been run, and PostgREST
+            # rejects the whole select= list (not just the unknown column)
+            # in that case. Retry without it rather than 500ing the entire
+            # list — ReportOut.locked defaults to False either way.
+            safe_fields = ",".join(f for f in list_fields.split(",") if f != "locked")
+            rows = await db.pg_select(table, {"select": safe_fields, "order": "uploaded_at.desc"})
         return [ReportOut(**r) for r in rows]
 
     @router.get("/{report_id}", response_model=ReportDetailOut)
