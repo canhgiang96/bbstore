@@ -660,6 +660,8 @@
     filtersWired: false,
     summarySeq: 0,
     detailSeq: 0,
+    monthlyAnalysisLoaded: false,
+    monthlyAnalysisRows: new Map(), // month ("YYYY-MM") -> row, so an expense-cell save can read its sibling cell's current value
   };
 
   async function refreshDashboard() {
@@ -691,7 +693,12 @@
 
     if (!dash.filtersWired) { initDashboardFilters(); dash.filtersWired = true; }
     // Both sub-tabs are fetched together so switching "Tổng quan"/"Dữ liệu
-    // chi tiết" is instant — no re-fetch on tab switch.
+    // chi tiết" is instant — no re-fetch on tab switch. "Phân tích tháng"
+    // is fetched lazily instead (see wireSubtabs) since it's a heavier,
+    // rarely-visited, unfiltered whole-history query — just mark it stale
+    // here so the next visit to that sub-tab picks up this upload/delete.
+    dash.monthlyAnalysisLoaded = false;
+    if (dash.subtab === "monthly") fetchAndRenderMonthlyAnalysis();
     await Promise.all([fetchAndRenderSummary(), fetchAndRenderDetailTable()]);
   }
 
@@ -721,7 +728,98 @@
         dash.subtab = btn.dataset.subtab;
         el("dashboardOverview").hidden = dash.subtab !== "overview";
         el("dashboardDetail").hidden = dash.subtab !== "detail";
+        el("dashboardMonthlyAnalysis").hidden = dash.subtab !== "monthly";
+        // "Phân tích tháng" deliberately ignores every filter (whole-
+        // business trend view, confirmed with the user 2026-08-28) — the
+        // filter bar would be misleading to leave visible there.
+        el("dashboardFilters").hidden = dash.subtab === "monthly";
+        if (dash.subtab === "monthly" && !dash.monthlyAnalysisLoaded) fetchAndRenderMonthlyAnalysis();
       };
+    });
+  }
+
+  /* ---- "Phân tích tháng" — a whole-history monthly P&L table (GMV/NMV/
+     Lợi nhuận gộp from the query engine, Chi phí bán hàng/Chi phí quản lý
+     entered by hand per month — see routers/monthly_analysis.py). Never
+     filtered by the Dashboard's own Thời gian/Trạng thái/etc pickers. ---- */
+  function monthLabel(month) { // "2026-01" -> "1/2026", matching the user's reference spreadsheet
+    const [y, m] = month.split("-");
+    return `${Number(m)}/${y}`;
+  }
+
+  function parseVnNumberInput(s) {
+    const cleaned = String(s ?? "").replace(/[^\d-]/g, "");
+    const n = parseInt(cleaned, 10);
+    return isNaN(n) ? 0 : n;
+  }
+
+  async function fetchAndRenderMonthlyAnalysis() {
+    const body = el("monthlyAnalysisBody");
+    body.innerHTML = `<tr><td colspan="13" class="muted" style="padding:16px;">Đang tải...</td></tr>`;
+    let rows;
+    try {
+      rows = await API.apiJson("/api/monthly-analysis");
+    } catch (err) {
+      body.innerHTML = `<tr><td colspan="13" class="muted" style="padding:16px;">Không tải được: ${escapeHtml(err.message)}</td></tr>`;
+      return;
+    }
+    dash.monthlyAnalysisLoaded = true;
+    dash.monthlyAnalysisRows = new Map(rows.map(r => [r.month, r]));
+    renderMonthlyAnalysisTable(rows);
+  }
+
+  function renderMonthlyAnalysisTable(rows) {
+    const isAdmin = API.isAdmin();
+    const body = el("monthlyAnalysisBody");
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="13" class="muted" style="padding:16px;">Chưa có dữ liệu.</td></tr>`;
+      return;
+    }
+
+    const expenseCell = (r, field) => isAdmin
+      ? `<input type="text" class="monthly-expense-input" data-month="${escapeHtml(r.month)}" data-field="${field}" value="${fmtNumber(r[field])}" />`
+      : fmtNumber(r[field]);
+
+    body.innerHTML = rows.map(r => `<tr>
+        <td>${monthLabel(r.month)}</td>
+        <td>${fmtNumber(r.gmv)}</td>
+        <td>${fmtPercentOfBase(r.nmv, r.gmv)}</td>
+        <td>${fmtNumber(r.nmv)}</td>
+        <td>${fmtPercentOfBase(r.loiNhuanGop, r.nmv)}</td>
+        <td>${fmtNumber(r.loiNhuanGop)}</td>
+        <td>${fmtPercentOfBase(r.chiPhiBanHang, r.loiNhuanGop)}</td>
+        <td>${expenseCell(r, "chiPhiBanHang")}</td>
+        <td>${fmtPercentOfBase(r.chiPhiQuanLy, r.loiNhuanGop)}</td>
+        <td>${expenseCell(r, "chiPhiQuanLy")}</td>
+        <td>${fmtPercentOfBase(r.loiNhuan, r.nmv)}</td>
+        <td>${fmtNumber(r.loiNhuan)}</td>
+        <td>${fmtPercentOfBase(r.chiPhiBanHang + r.chiPhiQuanLy, r.loiNhuanGop)}</td>
+      </tr>`).join("");
+
+    if (!isAdmin) return;
+    body.querySelectorAll(".monthly-expense-input").forEach(input => {
+      const commit = async () => {
+        const month = input.dataset.month;
+        const row = dash.monthlyAnalysisRows.get(month);
+        if (!row) return;
+        const field = input.dataset.field;
+        const newValue = parseVnNumberInput(input.value);
+        if (row[field] === newValue) return; // unchanged — skip the request
+        const chiPhiBanHang = field === "chiPhiBanHang" ? newValue : row.chiPhiBanHang;
+        const chiPhiQuanLy = field === "chiPhiQuanLy" ? newValue : row.chiPhiQuanLy;
+        try {
+          await API.apiJson(`/api/monthly-analysis/${month}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chiPhiBanHang, chiPhiQuanLy }),
+          });
+          await fetchAndRenderMonthlyAnalysis();
+        } catch (err) {
+          alert("Lỗi lưu chi phí: " + err.message);
+        }
+      };
+      input.addEventListener("blur", commit);
+      input.addEventListener("keydown", e => { if (e.key === "Enter") input.blur(); });
     });
   }
 

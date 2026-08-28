@@ -156,3 +156,18 @@ class RowsOut(BaseModel):
     total: int
     page: int
     pageSize: int
+
+
+class MonthlyAnalysisOut(BaseModel):
+    month: str  # "YYYY-MM"
+    gmv: float
+    nmv: float
+    loiNhuanGop: float
+    chiPhiBanHang: float
+    chiPhiQuanLy: float
+    loiNhuan: float
+
+
+class MonthlyExpenseUpdateRequest(BaseModel):
+    chiPhiBanHang: float
+    chiPhiQuanLy: float

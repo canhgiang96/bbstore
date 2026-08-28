@@ -9,7 +9,13 @@ import pytest
 from openpyxl import Workbook
 
 from app.excel_to_parquet import excel_to_parquet
-from app.query_engine import run_export_query, run_grouped_rows_query, run_rows_query, run_summary_query
+from app.query_engine import (
+    run_export_query,
+    run_grouped_rows_query,
+    run_monthly_analysis_query,
+    run_rows_query,
+    run_summary_query,
+)
 
 HEADERS = [
     "Mã đơn hàng", "Ngày đặt hàng", "Trạng Thái Đơn Hàng", "Lý do hủy",
@@ -220,6 +226,23 @@ def test_rows_pagination_across_multiple_reports(parquet_path, parquet_path_marc
     assert result["total"] == 8
     ids_seen = {r["orderId"] for r in result["rows"]}
     assert ids_seen == {"O1", "O2", "O3", "O4", "O5", "O6", "O7", "O8"}
+
+
+def test_monthly_analysis_groups_by_calendar_month_across_reports(parquet_path, parquet_path_march):
+    # Deliberately no date/status/channel filter params exist on this
+    # function at all — "Phân tích tháng" is a whole-history view
+    # (confirmed with the user 2026-08-28), unlike every other run_*_query.
+    result = run_monthly_analysis_query([parquet_path, parquet_path_march])
+    by_month = {r["month"]: r for r in result}
+    assert set(by_month) == {"2026-02", "2026-03"}
+    assert by_month["2026-02"]["gmv"] == 450000  # same fixture as test_summary_kpis_match_expected
+    assert by_month["2026-03"]["gmv"] == 240000  # O7 (90000*2) + O8 (60000*1)
+    # No Master File giá vốn mapped in this fixture -> Lợi nhuận gộp = NMV.
+    assert by_month["2026-02"]["loi_nhuan_gop"] == by_month["2026-02"]["nmv"]
+
+
+def test_monthly_analysis_empty_source_returns_empty_list():
+    assert run_monthly_analysis_query([]) == []
 
 
 def test_summary_empty_source_list_returns_zeroed_result():

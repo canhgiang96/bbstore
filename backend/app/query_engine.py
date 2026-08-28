@@ -955,3 +955,42 @@ def run_export_query(
         return [dict(zip(col_names, r)) for r in cursor.fetchall()]
     finally:
         con.close()
+
+
+def run_monthly_analysis_query(
+    parquet_source, cashflow_source=None, combo_source=None, master_source=None,
+    channel_source=None, aff_source=None, inhouse_handles=None,
+) -> list[dict]:
+    """GMV/NMV/Lợi nhuận gộp summed per calendar month across ALL of
+    history — deliberately unfiltered (no date/status/warehouse/channel/
+    etc. scoping), unlike every other run_*_query above. "Phân tích tháng"
+    is a whole-business trend view (confirmed with the user 2026-08-28),
+    not a scoped one, so this reuses _build_orders_working over every
+    ready Report exactly like the others, just skips _where_clause/
+    _apply_path_filters/_apply_search_filter entirely.
+    """
+    if _is_empty_source(parquet_source):
+        return []
+
+    con = _connect()
+    try:
+        available = _available_columns(con, parquet_source)
+        _build_orders_working(
+            con, parquet_source, available, combo_source, cashflow_source, master_source,
+            aff_source, inhouse_handles, channel_source,
+        )
+        sql = """
+            SELECT
+              strftime("date", '%Y-%m') AS month,
+              COALESCE(SUM("gmv"), 0) AS gmv,
+              COALESCE(SUM("nmv"), 0) AS nmv,
+              COALESCE(SUM("loiNhuanGop"), 0) AS loi_nhuan_gop
+            FROM orders_working
+            GROUP BY month
+            ORDER BY month
+        """
+        cursor = con.execute(sql)
+        col_names = [d[0] for d in cursor.description]
+        return [dict(zip(col_names, r)) for r in cursor.fetchall()]
+    finally:
+        con.close()

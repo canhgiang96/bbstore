@@ -318,6 +318,44 @@ hơn:**
   (`LockUpdateRequest`, `ReportOut.locked`), `frontend/js/app.js`
   (`createReportTab`'s Thao tác column).
 
+## 16. Sub-tab "Phân tích tháng" (bảng P&L theo tháng)
+
+- **⚠️ Cần chạy SQL migration trên Supabase trước khi dùng được**:
+  ```sql
+  create table monthly_expenses (
+    month date primary key,
+    chi_phi_ban_hang numeric not null default 0,
+    chi_phi_quan_ly numeric not null default 0,
+    updated_at timestamptz not null default now(),
+    updated_by uuid references profiles(id)
+  );
+  alter table monthly_expenses enable row level security;
+  ```
+  Chưa chạy thì tab vẫn hiện, Chi phí bán hàng/Chi phí quản lý mặc định 0
+  (không báo lỗi — try/except giống Combo/Master File/Kênh AFF lúc mới
+  thêm), chỉ là chưa lưu được số nhập vào.
+- Thêm sub-tab thứ 3 "Phân tích tháng" cạnh "Tổng quan"/"Dữ liệu chi
+  tiết" trong Dashboard — bảng P&L theo tháng đúng công thức trong file
+  mẫu user gửi (đối chiếu khớp chính xác với số liệu thật, 2026-08-28):
+  Tháng, GMV, %NMV/GMV, NMV, %LNG (=LNG/NMV), Lợi nhuận gộp, %CPBH/LNG,
+  Chi phí bán hàng, %CPQL/LNG, Chi phí quản lý, %LN/NMV, Lợi nhuận (=LNG −
+  Chi phí bán hàng − Chi phí quản lý), %TCP/LNG.
+  - **Cố ý KHÔNG áp dụng bộ lọc Dashboard** (Thời gian/Trạng thái/Kênh bán
+    hàng...) — luôn hiện toàn bộ lịch sử theo tháng, đúng tinh thần báo
+    cáo tài chính tổng thể (xác nhận với user). Ẩn luôn thanh filter khi
+    đang ở sub-tab này để tránh gây hiểu nhầm là có lọc.
+  - GMV/NMV/Lợi nhuận gộp: tổng hợp từ toàn bộ Report đã sẵn sàng qua
+    query engine hiện có (không cần dữ liệu mới). Chi phí bán hàng/Chi
+    phí quản lý: chi phí vận hành cấp công ty, KHÔNG có trong file Excel
+    nào — admin bấm trực tiếp vào ô trên bảng để nhập/sửa theo tháng, lưu
+    qua API (không cần form/màn hình riêng).
+  - `app/query_engine.py` (`run_monthly_analysis_query` — duy nhất trong
+    các `run_*_query` không nhận tham số lọc nào); `app/routers/
+    monthly_analysis.py` (mới, tái dùng `_all_ready_reports`/
+    `_all_dashboard_sources` từ `dashboard.py`); `frontend/index.html`
+    (sub-tab + bảng mới), `frontend/js/app.js` (`fetchAndRenderMonthly
+    Analysis`, ô nhập trực tiếp `.monthly-expense-input`).
+
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 
 - **Đa kênh khác (Lazada,...)**: áp dụng cách làm tương tự mục 10/11 khi có
@@ -327,7 +365,7 @@ hơn:**
 
 Mỗi lần sửa `frontend/js/app.js` hoặc `frontend/index.html`, nhớ tăng số
 `?v=N` ở 2 dòng `<script src="js/...">` cuối `index.html` — nếu không trình
-duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=36**.
+duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=37**.
 
 ## 9. Tối ưu hóa code (reuse/simplification/efficiency)
 

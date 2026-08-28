@@ -16,6 +16,7 @@ from .routers import (
     dashboard,
     inhouse_handles,
     master_reports,
+    monthly_analysis,
     reports,
     sales_channels,
 )
@@ -40,6 +41,7 @@ app.include_router(sales_channels.router)
 app.include_router(inhouse_handles.router)
 app.include_router(dashboard.router)
 app.include_router(dashboard.dashboard_router)
+app.include_router(monthly_analysis.router)
 
 
 @app.get("/api/health")

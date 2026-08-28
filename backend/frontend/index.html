@@ -67,7 +67,7 @@
 
       <p class="muted" id="dashboardSourceNote" style="margin: 0 0 14px;"></p>
 
-      <div class="filters card">
+      <div class="filters card" id="dashboardFilters">
         <div class="filter-item filter-grow">
           <label>Thời gian</label>
           <details class="multi-select" id="timeFilterPicker">
@@ -192,6 +192,7 @@
       <nav class="tabs subtabs" id="dashboardSubtabs">
         <button class="tab-btn active" data-subtab="overview">Tổng quan</button>
         <button class="tab-btn" data-subtab="detail">Dữ liệu chi tiết</button>
+        <button class="tab-btn" data-subtab="monthly">Phân tích tháng</button>
       </nav>
 
       <div id="dashboardOverview">
@@ -342,6 +343,28 @@
             <button id="detailPrev" class="btn btn-ghost">← Trước</button>
             <span id="detailPageInfo" class="muted"></span>
             <button id="detailNext" class="btn btn-ghost">Sau →</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="dashboardMonthlyAnalysis" hidden>
+        <div class="card table-card">
+          <div class="table-card-header">
+            <h3>Phân tích tháng</h3>
+            <span class="muted">Toàn bộ lịch sử, không áp dụng bộ lọc ở trên — Chi phí bán hàng/Chi phí quản lý bấm vào ô để nhập (Admin)</span>
+          </div>
+          <div class="table-scroll">
+            <table id="monthlyAnalysisTable">
+              <thead>
+                <tr>
+                  <th>Tháng</th><th>GMV</th><th>%NMV/GMV</th><th>NMV</th><th>%LNG</th>
+                  <th>Lợi nhuận gộp</th><th>%CPBH/LNG</th><th>Chi phí bán hàng</th>
+                  <th>%CPQL/LNG</th><th>Chi phí quản lý</th><th>%LN/NMV</th>
+                  <th>Lợi nhuận</th><th>%TCP/LNG</th>
+                </tr>
+              </thead>
+              <tbody id="monthlyAnalysisBody"></tbody>
+            </table>
           </div>
         </div>
       </div>
@@ -593,7 +616,7 @@
 
 </div><!-- /#appShell -->
 
-<script src="js/api.js?v=36"></script>
-<script src="js/app.js?v=36"></script>
+<script src="js/api.js?v=37"></script>
+<script src="js/app.js?v=37"></script>
 </body>
 </html>
