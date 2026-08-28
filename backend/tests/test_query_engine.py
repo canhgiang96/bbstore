@@ -378,32 +378,27 @@ def parquet_path_with_cancelled_discount():
     os.remove(path)
 
 
-def test_discount_voucher_gia_von_zeroed_for_non_gmv_status_rows(parquet_path_with_cancelled_discount):
-    # Bug found via a real user cross-check (2026-08-29): the Detail
-    # table's "discount"/"voucher"/"giaVon" columns used to stay unscoped
-    # by trạng thái, so a cancelled order's nonzero Người bán trợ giá still
-    # counted towards the Detail table's sum/export/Group theo total even
-    # though the Overview KPI card correctly excluded it — the two views
-    # disagreed. Both must now show 0 for the cancelled row.
+def test_detail_table_discount_stays_unscoped_by_status_unlike_overview_kpi(parquet_path_with_cancelled_discount):
+    # Confirmed with the user 2026-08-29 (initially flagged as a possible
+    # bug, then explicitly reaffirmed as intentional): Tổng quan's "Giảm
+    # giá" KPI only counts GMV-status orders (the GMV-funnel view), but
+    # Dữ liệu chi tiết's "discount"/"voucher"/"giaVon" columns deliberately
+    # show the raw source data regardless of trạng thái — a cancelled
+    # order's nonzero Người bán trợ giá still shows there. The two are
+    # meant to disagree in this case, not reconcile.
     result = run_rows_query(parquet_path_with_cancelled_discount, page_size=10)
     by_order = {r["orderId"]: r for r in result["rows"]}
     assert by_order["C1"]["trangThai"] == "Hủy chưa XK"
-    assert by_order["C1"]["discount"] == 0
-    assert by_order["C1"]["voucher"] == 0
+    assert by_order["C1"]["discount"] == 20000  # raw Người bán trợ giá, NOT zeroed by status
     assert by_order["C2"]["discount"] == 5000  # (5000 / qty 1) * soLuongThuc 1
     assert by_order["C2"]["trangThai"] == "Hoàn thành"
 
-
-def test_detail_table_discount_sum_reconciles_with_overview_kpi(parquet_path_with_cancelled_discount):
     summary = run_summary_query(parquet_path_with_cancelled_discount)
-    rows_result = run_rows_query(parquet_path_with_cancelled_discount, page_size=10)
-    grouped = run_grouped_rows_query(parquet_path_with_cancelled_discount, group_by="orderId", page_size=10)
-
-    detail_sum = sum(r["discount"] for r in rows_result["rows"])
-    grouped_sum = sum(r["discount"] for r in grouped["rows"])
-
-    assert summary["kpis"]["discount"] == detail_sum == grouped_sum
-    assert summary["kpis"]["discount"] > 0  # sanity: not vacuously true because everything's 0
+    detail_sum = sum(r["discount"] for r in result["rows"])
+    # Overview only counts C2 (5000); Detail's raw sum includes C1 too.
+    assert summary["kpis"]["discount"] == 5000
+    assert detail_sum == 25000
+    assert summary["kpis"]["discount"] != detail_sum
 
 
 def _write_raw_parquet(rows: list[dict]) -> str:

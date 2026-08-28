@@ -365,24 +365,22 @@ hơn:**
   `applyFiltersAndRender()` đổi thành `async`/trả về Promise để gọi
   `await` được), `style.css` (`.btn-spinner`).
 
-## 18. Fix: Giảm giá/Voucher/Giá vốn ở tab Dữ liệu chi tiết không khớp Tổng quan
+## 18. Xác nhận: Giảm giá/Voucher/Giá vốn ở Tổng quan vs Dữ liệu chi tiết KHÔNG khớp nhau — đây là chủ đích, không phải bug
 
-- **Bug thật, phát hiện qua user cross-check 2026-08-29**: KPI "Giảm giá"/
-  "Voucher"/"Giá vốn" ở tab Tổng quan chỉ tính cho đơn thuộc nhóm trạng
-  thái GMV (Hoàn thành/Đang giao/Hoàn 1 phần) — đúng như thiết kế. Nhưng
-  3 cột "Giảm giá"/"Voucher"/"Giá vốn" ở tab Dữ liệu chi tiết (bảng phẳng,
-  Group theo, và Xuất Excel) lại KHÔNG lọc theo trạng thái này — một đơn
-  "Hủy chưa XK" có Người bán trợ giá/Giá vốn khác 0 vẫn cộng vào tổng ở
-  tab chi tiết dù không cộng vào KPI Tổng quan → 2 tab ra số khác nhau
-  nếu Report có đơn hủy/hoàn kèm giảm giá.
-  - Đã sửa: 3 cột này giờ dùng đúng công thức đã lọc theo trạng thái
-    (vốn đã có sẵn, dùng cho công thức NMV/Lợi nhuận gộp nội bộ, nhưng
-    trước đây không được gán cho chính 3 cột này). Đơn không thuộc nhóm
-    GMV giờ hiện 0 ở cả Giảm giá/Voucher/Giá vốn trong Dữ liệu chi tiết,
-    khớp chính xác với Tổng quan (đã verify bằng dữ liệu thật + test).
-  - `app/query_engine.py` (`_build_orders_working`'s cột `discount`/
-    `voucher`/`giaVon` đổi sang dùng `scoped_discount_row_expr`/
-    `scoped_voucher_row_expr`/`scoped_gia_von_row_expr`).
+- User nhờ kiểm tra tổng Giảm giá 2 tab có khớp không — phát hiện KHÔNG
+  khớp khi Report có đơn Hủy/Hoàn kèm giảm giá: Tổng quan chỉ tính cho
+  đơn thuộc nhóm GMV (Hoàn thành/Đang giao/Hoàn 1 phần), Dữ liệu chi tiết
+  (bảng phẳng, Group theo, Xuất Excel) cộng cả đơn Hủy/Hoàn.
+  - **Thử sửa cho khớp nhau (commit trước) rồi bị user yêu cầu revert**:
+    user xác nhận đây là chủ đích — Tổng quan cố ý thể hiện phễu số liệu
+    từ GMV xuống (chỉ đơn tính vào GMV), Dữ liệu chi tiết cố ý giữ nguyên
+    data gốc từng dòng, không lọc theo trạng thái. Đã revert lại đúng
+    hành vi ban đầu, sửa comment trong code + test để ghi rõ đây là 2
+    mục đích khác nhau, tránh bị "sửa nhầm" lần sau.
+  - `app/query_engine.py` (`_build_orders_working`'s 3 cột `discount`/
+    `voucher`/`giaVon` giữ nguyên công thức KHÔNG lọc trạng thái, chỉ
+    dùng bản đã lọc `scoped_discount_row_expr`/... cho công thức NMV/Lợi
+    nhuận gộp nội bộ, không gán cho 3 cột này).
 
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 
