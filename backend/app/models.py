@@ -160,7 +160,7 @@ class RowsOut(BaseModel):
 
 class MonthlyAnalysisOut(BaseModel):
     month: str  # "YYYY-MM"
-    gmv: float
+    doanhThuThuan: float
     nmv: float
     loiNhuanGop: float
     chiPhiBanHang: float

@@ -336,19 +336,20 @@ hơn:**
   thêm), chỉ là chưa lưu được số nhập vào.
 - Thêm sub-tab thứ 3 "Phân tích tháng" cạnh "Tổng quan"/"Dữ liệu chi
   tiết" trong Dashboard — bảng P&L theo tháng đúng công thức trong file
-  mẫu user gửi (đối chiếu khớp chính xác với số liệu thật, 2026-08-28):
-  Tháng, GMV, %NMV/GMV, NMV, %LNG (=LNG/NMV), Lợi nhuận gộp, %CPBH/LNG,
-  Chi phí bán hàng, %CPQL/LNG, Chi phí quản lý, %LN/NMV, Lợi nhuận (=LNG −
-  Chi phí bán hàng − Chi phí quản lý), %TCP/LNG.
+  mẫu user gửi (đối chiếu khớp chính xác với số liệu thật, 2026-08-28),
+  nhưng **thay cột GMV bằng Doanh thu thuần** theo đúng yêu cầu user:
+  Tháng, Doanh thu thuần, %NMV/DTT, NMV, %LNG (=LNG/NMV), Lợi nhuận gộp,
+  %CPBH/LNG, Chi phí bán hàng, %CPQL/LNG, Chi phí quản lý, %LN/NMV, Lợi
+  nhuận (=LNG − Chi phí bán hàng − Chi phí quản lý), %TCP/LNG.
   - **Cố ý KHÔNG áp dụng bộ lọc Dashboard** (Thời gian/Trạng thái/Kênh bán
     hàng...) — luôn hiện toàn bộ lịch sử theo tháng, đúng tinh thần báo
     cáo tài chính tổng thể (xác nhận với user). Ẩn luôn thanh filter khi
     đang ở sub-tab này để tránh gây hiểu nhầm là có lọc.
-  - GMV/NMV/Lợi nhuận gộp: tổng hợp từ toàn bộ Report đã sẵn sàng qua
-    query engine hiện có (không cần dữ liệu mới). Chi phí bán hàng/Chi
-    phí quản lý: chi phí vận hành cấp công ty, KHÔNG có trong file Excel
-    nào — admin bấm trực tiếp vào ô trên bảng để nhập/sửa theo tháng, lưu
-    qua API (không cần form/màn hình riêng).
+  - Doanh thu thuần/NMV/Lợi nhuận gộp: tổng hợp từ toàn bộ Report đã sẵn
+    sàng qua query engine hiện có (không cần dữ liệu mới). Chi phí bán
+    hàng/Chi phí quản lý: chi phí vận hành cấp công ty, KHÔNG có trong
+    file Excel nào — admin bấm trực tiếp vào ô trên bảng để nhập/sửa theo
+    tháng, lưu qua API (không cần form/màn hình riêng).
   - `app/query_engine.py` (`run_monthly_analysis_query` — duy nhất trong
     các `run_*_query` không nhận tham số lọc nào); `app/routers/
     monthly_analysis.py` (mới, tái dùng `_all_ready_reports`/
@@ -365,7 +366,7 @@ hơn:**
 
 Mỗi lần sửa `frontend/js/app.js` hoặc `frontend/index.html`, nhớ tăng số
 `?v=N` ở 2 dòng `<script src="js/...">` cuối `index.html` — nếu không trình
-duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=37**.
+duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=38**.
 
 ## 9. Tối ưu hóa code (reuse/simplification/efficiency)
 

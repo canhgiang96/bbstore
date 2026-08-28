@@ -22,8 +22,8 @@ async def test_monthly_analysis_joins_query_engine_result_with_saved_expenses(mo
 
     def fake_run_monthly_analysis_query(*args, **kwargs):
         return [
-            {"month": "2026-01", "gmv": 250000.0, "nmv": 250000.0, "loi_nhuan_gop": 246760.0},
-            {"month": "2026-02", "gmv": 80000.0, "nmv": 80000.0, "loi_nhuan_gop": 78380.0},
+            {"month": "2026-01", "doanh_thu_thuan": 250000.0, "nmv": 250000.0, "loi_nhuan_gop": 246760.0},
+            {"month": "2026-02", "doanh_thu_thuan": 80000.0, "nmv": 80000.0, "loi_nhuan_gop": 78380.0},
         ]
 
     async def fake_pg_select(table, params=None):
@@ -64,7 +64,7 @@ async def test_monthly_analysis_degrades_gracefully_when_expenses_table_missing(
         return [], [], [], [], {}, [], []
 
     def fake_run_monthly_analysis_query(*args, **kwargs):
-        return [{"month": "2026-01", "gmv": 100.0, "nmv": 100.0, "loi_nhuan_gop": 100.0}]
+        return [{"month": "2026-01", "doanh_thu_thuan": 100.0, "nmv": 100.0, "loi_nhuan_gop": 100.0}]
 
     async def fake_pg_select(table, params=None):
         raise Exception("relation \"monthly_expenses\" does not exist")

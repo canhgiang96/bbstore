@@ -738,8 +738,10 @@
     });
   }
 
-  /* ---- "Phân tích tháng" — a whole-history monthly P&L table (GMV/NMV/
-     Lợi nhuận gộp from the query engine, Chi phí bán hàng/Chi phí quản lý
+  /* ---- "Phân tích tháng" — a whole-history monthly P&L table (Doanh thu
+     thuần/NMV/Lợi nhuận gộp from the query engine — the user's reference
+     spreadsheet led with GMV, but explicitly asked for Doanh thu thuần
+     instead here, 2026-08-28 — plus Chi phí bán hàng/Chi phí quản lý
      entered by hand per month — see routers/monthly_analysis.py). Never
      filtered by the Dashboard's own Thời gian/Trạng thái/etc pickers. ---- */
   function monthLabel(month) { // "2026-01" -> "1/2026", matching the user's reference spreadsheet
@@ -782,8 +784,8 @@
 
     body.innerHTML = rows.map(r => `<tr>
         <td>${monthLabel(r.month)}</td>
-        <td>${fmtNumber(r.gmv)}</td>
-        <td>${fmtPercentOfBase(r.nmv, r.gmv)}</td>
+        <td>${fmtNumber(r.doanhThuThuan)}</td>
+        <td>${fmtPercentOfBase(r.nmv, r.doanhThuThuan)}</td>
         <td>${fmtNumber(r.nmv)}</td>
         <td>${fmtPercentOfBase(r.loiNhuanGop, r.nmv)}</td>
         <td>${fmtNumber(r.loiNhuanGop)}</td>

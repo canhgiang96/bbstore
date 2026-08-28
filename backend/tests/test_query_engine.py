@@ -235,8 +235,11 @@ def test_monthly_analysis_groups_by_calendar_month_across_reports(parquet_path, 
     result = run_monthly_analysis_query([parquet_path, parquet_path_march])
     by_month = {r["month"]: r for r in result}
     assert set(by_month) == {"2026-02", "2026-03"}
-    assert by_month["2026-02"]["gmv"] == 450000  # same fixture as test_summary_kpis_match_expected
-    assert by_month["2026-03"]["gmv"] == 240000  # O7 (90000*2) + O8 (60000*1)
+    # No discount/voucher columns mapped in this fixture -> Doanh thu
+    # thuần = GMV exactly (see test_summary_kpis_match_expected for the
+    # underlying GMV=450000/O7+O8=240000 math).
+    assert by_month["2026-02"]["doanh_thu_thuan"] == 450000
+    assert by_month["2026-03"]["doanh_thu_thuan"] == 240000
     # No Master File giá vốn mapped in this fixture -> Lợi nhuận gộp = NMV.
     assert by_month["2026-02"]["loi_nhuan_gop"] == by_month["2026-02"]["nmv"]
 

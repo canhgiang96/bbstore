@@ -961,13 +961,17 @@ def run_monthly_analysis_query(
     parquet_source, cashflow_source=None, combo_source=None, master_source=None,
     channel_source=None, aff_source=None, inhouse_handles=None,
 ) -> list[dict]:
-    """GMV/NMV/Lợi nhuận gộp summed per calendar month across ALL of
-    history — deliberately unfiltered (no date/status/warehouse/channel/
-    etc. scoping), unlike every other run_*_query above. "Phân tích tháng"
-    is a whole-business trend view (confirmed with the user 2026-08-28),
-    not a scoped one, so this reuses _build_orders_working over every
-    ready Report exactly like the others, just skips _where_clause/
-    _apply_path_filters/_apply_search_filter entirely.
+    """Doanh thu thuần/NMV/Lợi nhuận gộp summed per calendar month across
+    ALL of history — deliberately unfiltered (no date/status/warehouse/
+    channel/etc. scoping), unlike every other run_*_query above. "Phân
+    tích tháng" is a whole-business trend view (confirmed with the user
+    2026-08-28), not a scoped one, so this reuses _build_orders_working
+    over every ready Report exactly like the others, just skips
+    _where_clause/_apply_path_filters/_apply_search_filter entirely.
+
+    Doanh thu thuần (not GMV) is the table's leading revenue figure — the
+    user's reference spreadsheet used GMV, but explicitly asked for it to
+    be replaced with Doanh thu thuần here (2026-08-28).
     """
     if _is_empty_source(parquet_source):
         return []
@@ -982,7 +986,7 @@ def run_monthly_analysis_query(
         sql = """
             SELECT
               strftime("date", '%Y-%m') AS month,
-              COALESCE(SUM("gmv"), 0) AS gmv,
+              COALESCE(SUM("doanhThuThuan"), 0) AS doanh_thu_thuan,
               COALESCE(SUM("nmv"), 0) AS nmv,
               COALESCE(SUM("loiNhuanGop"), 0) AS loi_nhuan_gop
             FROM orders_working

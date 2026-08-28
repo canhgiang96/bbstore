@@ -1,10 +1,12 @@
-"""Monthly P&L-style analysis ("Phân tích tháng") — GMV/NMV/Lợi nhuận gộp
-summed per calendar month across ALL history (deliberately unfiltered, not
-scoped by the Dashboard's Thời gian/Trạng thái/Kênh bán hàng/etc filters —
-confirmed with the user 2026-08-28), joined with manually-entered monthly
-Chi phí bán hàng/Chi phí quản lý (company-level operating expenses no
-uploaded Excel file carries) to compute Lợi nhuận and the standard ratio
-columns the user's own reference spreadsheet uses.
+"""Monthly P&L-style analysis ("Phân tích tháng") — Doanh thu thuần/NMV/
+Lợi nhuận gộp summed per calendar month across ALL history (deliberately
+unfiltered, not scoped by the Dashboard's Thời gian/Trạng thái/Kênh bán
+hàng/etc filters — confirmed with the user 2026-08-28), joined with
+manually-entered monthly Chi phí bán hàng/Chi phí quản lý (company-level
+operating expenses no uploaded Excel file carries) to compute Lợi nhuận
+and the standard ratio columns the user's own reference spreadsheet uses
+(which led with GMV — the user explicitly asked for Doanh thu thuần here
+instead, 2026-08-28).
 
 Reuses routers.dashboard's Report-gathering helpers rather than
 duplicating them — this endpoint needs the exact same "every ready
@@ -52,7 +54,7 @@ async def monthly_analysis(user: dict = Depends(get_current_user)):
         chi_phi_quan_ly = float(expense.get("chi_phi_quan_ly") or 0)
         result.append(MonthlyAnalysisOut(
             month=row["month"],
-            gmv=row["gmv"],
+            doanhThuThuan=row["doanh_thu_thuan"],
             nmv=row["nmv"],
             loiNhuanGop=row["loi_nhuan_gop"],
             chiPhiBanHang=chi_phi_ban_hang,
