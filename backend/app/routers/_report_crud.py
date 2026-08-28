@@ -23,7 +23,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .. import db, storage
 from ..deps import get_current_user, require_admin
-from ..models import ChannelUpdateRequest, ReportCreatedOut, ReportDetailOut, ReportOut
+from ..models import ChannelUpdateRequest, LockUpdateRequest, ReportCreatedOut, ReportDetailOut, ReportOut
 from ..query_engine import invalidate_local_parquet_cache
 
 # Excel-to-parquet conversion (openpyxl + pandas) is the single most
@@ -199,11 +199,21 @@ def create_report_crud_router(
 
             return {"ok": True}
 
+    @router.patch("/{report_id}/lock")
+    async def update_lock(report_id: str, body: LockUpdateRequest, user: dict = Depends(require_admin)):
+        row = await db.pg_select_one(table, {"id": f"eq.{report_id}"})
+        if not row:
+            raise HTTPException(status_code=404, detail="Không tìm thấy Report.")
+        await db.pg_update(table, {"id": f"eq.{report_id}"}, {"locked": body.locked})
+        return {"ok": True}
+
     @router.delete("/{report_id}", status_code=204)
     async def delete_report(report_id: str, user: dict = Depends(require_admin)):
         row = await db.pg_select_one(table, {"id": f"eq.{report_id}"})
         if not row:
             raise HTTPException(status_code=404, detail="Không tìm thấy Report.")
+        if row.get("locked"):
+            raise HTTPException(status_code=409, detail="Report đã bị khóa — mở khóa trước khi xóa.")
         storage.delete_objects([row.get("original_xlsx_key"), row.get("parquet_key")])
         await db.pg_delete(table, {"id": f"eq.{report_id}"})
 

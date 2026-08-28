@@ -184,12 +184,15 @@
           <th>Report</th><th>Trạng thái</th><th>Số dòng</th><th>Tải lên lúc</th>${cols.map(c => `<th>${escapeHtml(c.label)}</th>`).join("")}${isAdmin ? "<th>Thao tác</th>" : ""}
         </tr></thead><tbody>` + reports.map(r => {
           const rowHtml = `<tr>
-            <td>${escapeHtml(r.name)}</td>
+            <td>${r.locked ? "🔒 " : ""}${escapeHtml(r.name)}</td>
             <td>${STATUS_BADGE[r.status] || escapeHtml(r.status)}${r.status === "failed" && r.error_message ? `<div class="muted" style="margin-top:4px;">${escapeHtml(r.error_message)}</div>` : ""}</td>
             <td>${r.row_count != null ? r.row_count.toLocaleString("vi-VN") : "–"}</td>
             <td>${new Date(r.uploaded_at).toLocaleString("vi-VN")}</td>
             ${cols.map(c => `<td>${c.cell(r, isAdmin)}</td>`).join("")}
-            ${isAdmin ? `<td><button class="btn btn-danger btn-sm" data-del="${escapeHtml(r.id)}">Xóa</button></td>` : ""}
+            ${isAdmin ? `<td>
+                <button class="btn btn-ghost btn-sm" data-lock="${escapeHtml(r.id)}" data-locked="${r.locked ? "1" : "0"}">${r.locked ? "Mở khóa" : "Khóa"}</button>
+                <button class="btn btn-danger btn-sm" data-del="${escapeHtml(r.id)}"${r.locked ? ' disabled title="Report đã khóa — mở khóa trước khi xóa"' : ""}>Xóa</button>
+              </td>` : ""}
           </tr>`;
           return rowHtml + (rowSuffix ? rowSuffix(r, isAdmin, colspan) : "");
         }).join("") + `</tbody></table></div>`;
@@ -200,10 +203,31 @@
             const id = btn.dataset.del;
             const report = reports.find(r => r.id === id);
             if (!confirm(`Xóa toàn bộ Report "${report ? report.name : id}"? Hành động này không thể hoàn tác.`)) return;
-            await API.apiJson(`${endpoint}/${id}`, { method: "DELETE" });
+            try {
+              await API.apiJson(`${endpoint}/${id}`, { method: "DELETE" });
+            } catch (err) {
+              alert("Lỗi xóa Report: " + err.message);
+              return;
+            }
             if (onBeforeDelete) onBeforeDelete(id);
             await refresh();
             if (afterChange) afterChange();
+          };
+        });
+        body.querySelectorAll("button[data-lock]").forEach(btn => {
+          btn.onclick = async () => {
+            const id = btn.dataset.lock;
+            const nextLocked = btn.dataset.locked !== "1";
+            try {
+              await API.apiJson(`${endpoint}/${id}/lock`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ locked: nextLocked }),
+              });
+              await refresh();
+            } catch (err) {
+              alert("Lỗi khóa/mở khóa Report: " + err.message);
+            }
           };
         });
         if (hasChannel) wireChannelSelects(body, endpoint, async () => { await refresh(); if (afterChannelChange) afterChannelChange(); });

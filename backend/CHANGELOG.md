@@ -296,6 +296,28 @@ hơn:**
     `refundAmount`, keyword mới cho quantity/returnedQty/skuVariant, guard
     exact-match-only cho 3 field mới tránh nhầm cột dài hơn của Shopee).
 
+## 15. Khóa Report để tránh xóa nhầm
+
+- **⚠️ Cần chạy SQL migration trên Supabase trước khi dùng được**:
+  ```sql
+  alter table reports add column locked boolean not null default false;
+  alter table cashflow_reports add column locked boolean not null default false;
+  alter table combo_reports add column locked boolean not null default false;
+  alter table master_reports add column locked boolean not null default false;
+  alter table adjustments_reports add column locked boolean not null default false;
+  alter table aff_channel_reports add column locked boolean not null default false;
+  ```
+  Chưa chạy thì nút "Khóa" vẫn hiện nhưng bấm sẽ báo lỗi (cột chưa tồn
+  tại) — không ảnh hưởng phần còn lại của hệ thống.
+- Mỗi Report (cả 6 loại: Đơn hàng/Dòng tiền/Combo/Master File/Điều chỉnh
+  doanh thu/Kênh AFF) có nút "Khóa"/"Mở khóa" (admin) trong danh sách —
+  Report khóa hiện 🔒 trước tên, nút "Xóa" bị vô hiệu hóa (kèm tooltip).
+  Backend cũng chặn xóa Report đã khóa (409) dù request đến trực tiếp qua
+  API, không chỉ chặn ở giao diện. `app/routers/_report_crud.py`
+  (`update_lock`, guard trong `delete_report`), `app/models.py`
+  (`LockUpdateRequest`, `ReportOut.locked`), `frontend/js/app.js`
+  (`createReportTab`'s Thao tác column).
+
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 
 - **Đa kênh khác (Lazada,...)**: áp dụng cách làm tương tự mục 10/11 khi có
@@ -305,7 +327,7 @@ hơn:**
 
 Mỗi lần sửa `frontend/js/app.js` hoặc `frontend/index.html`, nhớ tăng số
 `?v=N` ở 2 dòng `<script src="js/...">` cuối `index.html` — nếu không trình
-duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=35**.
+duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=36**.
 
 ## 9. Tối ưu hóa code (reuse/simplification/efficiency)
 

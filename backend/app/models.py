@@ -39,6 +39,11 @@ class ReportOut(BaseModel):
     status: Literal["processing", "ready", "failed"]
     error_message: Optional[str] = None
     sales_channel_id: Optional[str] = None
+    locked: bool = False
+
+
+class LockUpdateRequest(BaseModel):
+    locked: bool
 
 
 class ReportDetailOut(ReportOut):
