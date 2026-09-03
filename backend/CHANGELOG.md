@@ -460,6 +460,23 @@ hơn:**
     lại" (cạnh nút Khóa/Xóa), disable khi Report đang `processing`, có
     confirm trước khi chạy.
 
+## 23. Ô lọc (Trạng thái/Kênh bán hàng/...) hiện tất cả giá trị, không phụ thuộc khoảng thời gian đang chọn
+
+- **User báo 2026-09-03**: chọn "Tháng trước" (tháng không có đơn hàng
+  nào) thì mọi ô lọc (Trạng thái, Phân loại kho/mục/sản phẩm, Kênh bán
+  hàng, Kênh nhỏ) đều hiện "Không có giá trị" — nhìn giống lỗi. Thực ra
+  các ô lọc trước đây CÓ phụ thuộc khoảng thời gian (chỉ không phụ thuộc
+  các bộ lọc khác như Trạng thái/Kênh bán hàng), nên khi 1 khoảng thời
+  gian không có đơn hàng thì facets rỗng theo. User xác nhận muốn ô lọc
+  hiện **tất cả giá trị từng tồn tại trong toàn bộ dữ liệu**, bất kể đang
+  lọc thời gian nào — chỉ số KPI/bảng chi tiết vẫn lọc theo thời gian như
+  cũ, chỉ riêng danh sách lựa chọn trong ô lọc là không lọc theo thời
+  gian nữa.
+  - `app/query_engine.py` (`run_summary_query`): bảng tạm `orders_working`
+    được build lại 1 lần nữa (không truyền from_date/to_date) ngay trước
+    khi tính facets, sau khi mọi truy vấn KPI/timeline/top_n ở trên đã
+    chạy xong trên bản có lọc thời gian như cũ.
+
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 
 - **Đa kênh khác (Lazada,...)**: áp dụng cách làm tương tự mục 10/11 khi có

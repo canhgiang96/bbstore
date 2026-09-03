@@ -112,6 +112,26 @@ def test_summary_facets_unaffected_by_status_filter(parquet_path):
     assert result["kpis"]["doanhSo"] == 200000
 
 
+def test_summary_facets_unaffected_by_date_range(parquet_path):
+    # User confirmed 2026-09-03: after "Tháng trước" showed every filter
+    # dropdown as empty for a month with genuinely zero orders, facets
+    # must list every value that has EVER existed across all data, not
+    # just whatever falls inside the currently-selected time filter —
+    # unlike every other facet-unaffected-by-filter test above, this one
+    # exercises the one filter that used to still narrow facets (the date
+    # range itself, since orders_working was date-scoped at the SQL
+    # level).
+    result = run_summary_query(parquet_path, from_date="2026-02-05", to_date="2026-02-05")
+    assert set(result["facets"]["statuses"]) == {
+        "Hủy sau XK", "Hủy chưa XK", "Hoàn hàng", "Hoàn 1 phần", "Hoàn thành", "Đang giao",
+    }
+    assert set(result["facets"]["categories"]) == {"Áo", "Quần"}
+    # But the KPI numbers themselves are still scoped to the date range —
+    # only O5 (2026-02-05, Hoàn thành, 200000) falls inside it.
+    assert result["kpis"]["doanhSo"] == 200000
+    assert result["kpis"]["rowCount"] == 1
+
+
 def test_summary_category_filter(parquet_path):
     result = run_summary_query(parquet_path, category="Áo")
     # O1 (100k*2=200k, Hủy sau XK), O3 (20k*4=80k, Hoàn hàng), O5 (200k*1=200k, Hoàn thành)

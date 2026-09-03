@@ -514,7 +514,7 @@ def _build_orders_working(
     loi_nhuan_gop_row_expr = f"({nmv_row_expr} - {scoped_gia_von_row_expr})"
 
     create_sql = f"""
-        CREATE TEMP TABLE orders_working AS
+        CREATE OR REPLACE TEMP TABLE orders_working AS
         SELECT
           o."date" AS "date",
           o."orderId" AS "orderId",
@@ -668,11 +668,21 @@ def run_summary_query(
         category_breakdown = top_n("category")
         top_customers = top_n("customer")
 
-        # Facets ignore every filter EXCEPT the date range (orders_working
-        # itself is already date-scoped, per _build_orders_working) — the
-        # dropdown options don't shrink as the user picks a category/status/
-        # etc., but they do reflect whatever time range is selected, same as
-        # the KPIs.
+        # Facets ignore every filter, INCLUDING the date range — user
+        # confirmed 2026-09-03 (after "Tháng trước" showed every dropdown
+        # as empty for a month with genuinely zero orders) that the filter
+        # checklists should always list every value that has EVER existed
+        # across all uploaded data, not just whatever falls inside the
+        # currently-selected period. orders_working was already
+        # materialized date-scoped above for the KPIs/timeline/top_n
+        # queries; rebuild it here (CREATE OR REPLACE, same connection)
+        # with from_date/to_date cleared just for this one query — every
+        # query above this point already ran against the scoped version.
+        available = _available_columns(con, parquet_source)
+        _build_orders_working(
+            con, parquet_source, available, combo_source, cashflow_source, master_source,
+            aff_source, inhouse_handles, channel_source, from_date=None, to_date=None,
+        )
         facets_sql = """
             SELECT
               list(DISTINCT "category") AS categories,
