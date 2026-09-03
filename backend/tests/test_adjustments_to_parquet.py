@@ -65,7 +65,9 @@ def test_adjustment_dates_disambiguated_regardless_of_header_order():
     assert mapping2["paymentCompletedDate"] == "Ngày hoàn thành thanh toán"
 
 
-def test_missing_transaction_id_column_raises():
+def test_missing_both_identifying_columns_raises():
+    # Neither "Mã giao dịch" nor "Mã đơn hàng liên quan" — no way to tell
+    # a real row from a blank one, must reject.
     headers = ["Lý do điều chỉnh", "Số tiền điều chỉnh"]
     rows = [["Hàng lỗi", -1000]]
     try:
@@ -73,6 +75,40 @@ def test_missing_transaction_id_column_raises():
         assert False, "expected AdjustmentMappingError"
     except AdjustmentMappingError:
         pass
+
+
+# Real TikTok-style export (confirmed with the user 2026-09-03, file
+# "ĐIỀU CHỈNH.xlsx") — no "Mã giao dịch" column at all, only "Mã đơn hàng
+# liên quan", which legitimately repeats across separate adjustment events
+# for the same order (different dates/reasons/amounts each time).
+NO_TRANSACTION_ID_HEADERS = [
+    "Ngày hoàn thành điều chỉnh đơn hàng", "Loại điều chỉnh | Mô tả",
+    "Lý do điều chỉnh", "Số tiền điều chỉnh", "Mã đơn hàng liên quan", "Ngày hoàn thành thanh toán",
+]
+
+NO_TRANSACTION_ID_ROWS = [
+    ["2026-01-01", "Trả hàng/ Hoàn tiền", "", -429952, "2512222YMRHBDE", "2025-12-27"],
+    # Same "Mã đơn hàng liên quan" as above, but a distinct adjustment event.
+    ["2026-01-11", "Chương trình Marketing", "", -32194, "2512222YMRHBDE", "2026-01-10"],
+    ["", "", "", 0, "", ""],  # fully blank -> skipped
+]
+
+
+def test_file_without_transaction_id_column_converts_using_related_order_id():
+    parquet_bytes, row_count, mapping = adjustment_excel_to_parquet(
+        make_xlsx_bytes(NO_TRANSACTION_ID_HEADERS, NO_TRANSACTION_ID_ROWS)
+    )
+    assert row_count == 2  # the fully-blank row is skipped
+    assert "transactionId" not in mapping
+    assert mapping["relatedOrderId"] == "Mã đơn hàng liên quan"
+
+    df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
+    assert (df["transactionId"] == "").all()
+    # Both rows for the same order kept as separate records, not deduped —
+    # they're genuinely different adjustment events (verified against the
+    # real file: different dates/reasons/amounts per row).
+    assert df["relatedOrderId"].tolist() == ["2512222YMRHBDE", "2512222YMRHBDE"]
+    assert df["amount"].tolist() == [-429952, -32194]
 
 
 def test_blank_transaction_id_rows_are_skipped():

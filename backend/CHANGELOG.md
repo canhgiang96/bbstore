@@ -401,6 +401,19 @@ hơn:**
     `frontend/index.html`/`frontend/js/app.js` (cập nhật chú thích KPI
     card "Phí Piship").
 
+## 20. Điều chỉnh doanh thu: chấp nhận file không có "Mã giao dịch"
+
+- File TikTok thật ("ĐIỀU CHỈNH.xlsx", xác nhận với user 2026-09-03) chỉ
+  có 6 cột, không có "Mã giao dịch" — trước đây bắt buộc cột này nên
+  upload báo lỗi "Không tìm thấy cột Mã giao dịch trong file".
+  - Giờ chỉ cần có ÍT NHẤT MỘT trong 2 cột "Mã giao dịch" HOẶC "Mã đơn
+    hàng liên quan" — dùng cột nào có sẵn trong file để xác định dòng nào
+    là dữ liệu thật (bỏ qua dòng trống cả 2 cột). "Mã đơn hàng liên quan"
+    được xác nhận là KHÔNG dùng để gộp trùng — cùng 1 mã đơn có thể lặp
+    lại ở nhiều dòng vì là các lần điều chỉnh khác nhau (khác ngày/lý
+    do/số tiền), verify bằng dữ liệu thật (2.817 dòng convert đúng).
+  - `app/adjustments_to_parquet.py`.
+
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 
 - **Đa kênh khác (Lazada,...)**: áp dụng cách làm tương tự mục 10/11 khi có

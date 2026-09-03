@@ -32,7 +32,7 @@ ADJUSTMENT_KEYWORDS = {
 
 
 class AdjustmentMappingError(ValueError):
-    """Raised when the uploaded file is missing the "Mã giao dịch" column."""
+    """Raised when the uploaded file has neither "Mã giao dịch" nor "Mã đơn hàng liên quan"."""
 
 
 def detect_adjustment_mapping(headers: list[str]) -> dict[str, str]:
@@ -44,16 +44,24 @@ def adjustment_excel_to_parquet(file_like, sheet_name=0) -> tuple[bytes, int, di
 
     Every field except "amount" is preserved as plain text (dates included —
     this data isn't filtered/joined anywhere, so there's no need to parse
-    them into real date values). Rows with a blank "Mã giao dịch" are
-    skipped.
+    them into real date values).
+
+    "Mã giao dịch" isn't always present — a real TikTok-style export
+    (confirmed with the user 2026-09-03, file "ĐIỀU CHỈNH.xlsx") has no
+    such column at all, only "Mã đơn hàng liên quan". A row is kept as long
+    as EITHER identifying column has a value (whichever the file actually
+    has); the same "Mã đơn hàng liên quan" legitimately repeats across rows
+    for separate adjustment events on the same order (verified against the
+    real file — different dates/reasons/amounts), so it's never used to
+    dedupe, only to decide "is this row real".
     """
     raw_rows, headers = read_excel_rows(file_like, sheet_name=sheet_name)
     mapping = detect_adjustment_mapping(headers)
 
-    if "transactionId" not in mapping:
-        raise AdjustmentMappingError("Không tìm thấy cột Mã giao dịch trong file.")
+    if "transactionId" not in mapping and "relatedOrderId" not in mapping:
+        raise AdjustmentMappingError("Không tìm thấy cột Mã giao dịch hoặc Mã đơn hàng liên quan trong file.")
 
-    txn_col = mapping["transactionId"]
+    txn_col = mapping.get("transactionId")
     date_col = mapping.get("adjustmentDate")
     type_col = mapping.get("adjustmentType")
     reason_col = mapping.get("reason")
@@ -67,7 +75,8 @@ def adjustment_excel_to_parquet(file_like, sheet_name=0) -> tuple[bytes, int, di
     rows = []
     for row in raw_rows:
         txn_id = text(row, txn_col)
-        if not txn_id:
+        related_order_id = text(row, order_col)
+        if not txn_id and not related_order_id:
             continue
         rows.append({
             "transactionId": txn_id,
@@ -75,13 +84,13 @@ def adjustment_excel_to_parquet(file_like, sheet_name=0) -> tuple[bytes, int, di
             "adjustmentType": text(row, type_col),
             "reason": text(row, reason_col),
             "amount": to_number(row.get(amount_col)) if amount_col else 0.0,
-            "relatedOrderId": text(row, order_col),
+            "relatedOrderId": related_order_id,
             "paymentCompletedDate": text(row, paid_col),
         })
 
     if not rows:
         raise AdjustmentMappingError(
-            "Không có dòng dữ liệu hợp lệ nào (không đọc được Mã giao dịch ở bất kỳ dòng nào)."
+            "Không có dòng dữ liệu hợp lệ nào (không đọc được Mã giao dịch/Mã đơn hàng liên quan ở bất kỳ dòng nào)."
         )
 
     table = pa.Table.from_pylist(rows)
