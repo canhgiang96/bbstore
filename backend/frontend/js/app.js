@@ -1170,7 +1170,7 @@
     { label: "Voucher", valueId: "kpiVoucher", pctId: "kpiVoucherPct", value: k => k.voucher, base: k => k.gmv, note: "Mã giảm giá của Shop" },
     { label: "Doanh thu thuần", valueId: "kpiDoanhThuThuan", pctId: "kpiDoanhThuThuanPct", value: k => k.doanhThuThuan, base: k => k.gmv, note: "GMV − Giảm giá − Voucher", ordersId: "kpiDoanhThuThuanOrders", orders: k => k.doanhThuThuanOrders },
     { label: "Phí sàn", valueId: "kpiPlatformFee", pctId: "kpiPlatformFeePct", value: k => k.platformFee, base: k => k.doanhThuThuan, note: "Phí cố định + Phí dịch vụ + Phí xử lý giao dịch" },
-    { label: "Phí Piship", valueId: "kpiPiship", pctId: "kpiPishipPct", value: k => k.piship, base: k => k.doanhThuThuan, note: "1.620 / đơn hàng", ordersId: "kpiPishipOrders", orders: k => k.pishipOrders },
+    { label: "Phí Piship", valueId: "kpiPiship", pctId: "kpiPishipPct", value: k => k.piship, base: k => k.doanhThuThuan, note: "1.620/đơn (trước 23/5/2026), 2.700/đơn (từ 23/5/2026)", ordersId: "kpiPishipOrders", orders: k => k.pishipOrders },
     { label: "Phí AFF", valueId: "kpiPhiAff", pctId: "kpiPhiAffPct", value: k => k.phiAff, base: k => k.doanhThuThuan, note: "Phí hoa hồng Tiếp thị liên kết", ordersId: "kpiPhiAffOrders", orders: k => k.phiAffOrders },
     { label: "NMV", valueId: "kpiNmv", pctId: "kpiNmvPct", value: k => k.nmv, base: k => k.doanhThuThuan, note: "Doanh thu thuần − Phí sàn − Phí Piship − Phí AFF", ordersId: "kpiNmvOrders", orders: k => k.nmvOrders },
     { label: "Giá vốn", valueId: "kpiGiaVon", pctId: "kpiGiaVonPct", value: k => k.giaVon, base: k => k.doanhThuThuan, note: "Số lượng thực x Giá vốn (Master File)" },

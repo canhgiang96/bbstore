@@ -382,6 +382,25 @@ hơn:**
     dùng bản đã lọc `scoped_discount_row_expr`/... cho công thức NMV/Lợi
     nhuận gộp nội bộ, không gán cho 3 cột này).
 
+## 19. Phí Piship tăng từ 1.620 lên 2.700 kể từ 23/05/2026
+
+- User xác nhận: đơn Shopee từ ngày 23/05/2026 trở đi áp dụng Piship
+  2.700/đơn thay vì 1.620/đơn (đơn trước ngày đó vẫn giữ 1.620). So sánh
+  theo **ngày đặt hàng của chính đơn đó** ("Ngày đặt hàng" trong file
+  Excel), không phải ngày upload hay ngày hiện tại.
+  - Không đọc được ngày (cột Ngày chưa map/không parse được) thì mặc định
+    giữ mức cũ 1.620, không tự đoán mức mới — cùng nguyên tắc thận trọng
+    như `quantity_known`/`status_known` ở chỗ khác trong code.
+  - Report Shopee **đã upload từ trước** với đơn từ 23/05/2026 trở đi vẫn
+    đang lưu Piship=1.620 cũ trong Parquet đã convert — cần bấm chọn lại
+    đúng kênh "Shopee" ở dropdown "Kênh bán hàng" của report đó (không
+    cần đổi gì khác) để hệ thống tự convert lại file gốc với mức phí mới.
+  - `app/derive.py` (`compute_piship_fee` nhận thêm `order_date`,
+    `PISHIP_FEE_PER_ORDER_RAISED`, `PISHIP_RATE_CHANGE_DATE`),
+    `app/excel_to_parquet.py` (truyền `date` vào `compute_piship_fee`),
+    `frontend/index.html`/`frontend/js/app.js` (cập nhật chú thích KPI
+    card "Phí Piship").
+
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 
 - **Đa kênh khác (Lazada,...)**: áp dụng cách làm tương tự mục 10/11 khi có
@@ -391,7 +410,7 @@ hơn:**
 
 Mỗi lần sửa `frontend/js/app.js` hoặc `frontend/index.html`, nhớ tăng số
 `?v=N` ở 2 dòng `<script src="js/...">` cuối `index.html` — nếu không trình
-duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=39**.
+duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=40**.
 
 ## 9. Tối ưu hóa code (reuse/simplification/efficiency)
 

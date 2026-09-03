@@ -7,6 +7,8 @@ invariant both depend on this matching exactly.
 """
 from __future__ import annotations
 
+from datetime import date
+
 from .mapping import strip_diacritics
 from .parsing import to_number
 
@@ -144,6 +146,12 @@ def compute_voucher(shop_voucher: float, order_paid_ratio: float, quantity: floa
 
 
 PISHIP_FEE_PER_ORDER = 1620
+# Confirmed with the user 2026-09-03: Shopee raised Piship starting exactly
+# this date — orders from 23/05/2026 onward use the new rate, everything
+# before keeps the old one. Compared against the order's own "Ngày đặt
+# hàng", not the upload date.
+PISHIP_FEE_PER_ORDER_RAISED = 2700
+PISHIP_RATE_CHANGE_DATE = date(2026, 5, 23)
 
 
 def compute_platform_fee(fixed_fee: float, service_fee: float, transaction_fee: float, order_paid_ratio: float) -> float:
@@ -155,13 +163,24 @@ def compute_platform_fee(fixed_fee: float, service_fee: float, transaction_fee: 
     return (fixed_fee + service_fee + transaction_fee) * order_paid_ratio
 
 
-def compute_piship_fee(is_first_line_of_order: bool) -> float:
-    """Phí Piship là một khoản phí cố định 1.620 cho mỗi đơn hàng (không
-    nhân theo số dòng sản phẩm) — assigned to just the first surviving line
-    of each order so summing rows gives the correct per-order total instead
+def compute_piship_fee(is_first_line_of_order: bool, order_date=None) -> float:
+    """Phí Piship là một khoản phí cố định cho mỗi đơn hàng (không nhân
+    theo số dòng sản phẩm) — assigned to just the first surviving line of
+    each order so summing rows gives the correct per-order total instead
     of double-counting it once per line.
+
+    The per-order rate depends on the order's own date: 1.620 before
+    23/05/2026, 2.700 from that date onward (see PISHIP_RATE_CHANGE_DATE).
+    order_date=None (date column unmapped/unparseable) falls back to the
+    old 1.620 rate rather than guessing — same "don't silently assume the
+    newer behavior" caution as quantity_known/status_known elsewhere.
     """
-    return PISHIP_FEE_PER_ORDER if is_first_line_of_order else 0.0
+    if not is_first_line_of_order:
+        return 0.0
+    order_date_only = order_date.date() if hasattr(order_date, "date") else order_date
+    if order_date_only is not None and order_date_only >= PISHIP_RATE_CHANGE_DATE:
+        return PISHIP_FEE_PER_ORDER_RAISED
+    return PISHIP_FEE_PER_ORDER
 
 
 # Piship is Shopee's own delivery-partner fee scheme — it doesn't apply to

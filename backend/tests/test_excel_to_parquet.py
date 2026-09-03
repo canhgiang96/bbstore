@@ -313,6 +313,32 @@ def test_piship_gated_by_sales_channel():
         assert first_line_piship == (1620 if expect_piship else 0), f"channel={channel!r}"
 
 
+def test_piship_rate_changes_on_23_05_2026():
+    # Confirmed with the user 2026-09-03: Shopee raised Piship from 1.620
+    # to 2.700 starting exactly 23/05/2026, compared against the order's
+    # own "Ngày đặt hàng" — not upload date, not today's date.
+    rows = [
+        ["P1", "2026-05-22 10:00", "Hoàn thành", "", "A100-1", "SP A", 100000, 1, 0],  # day before
+        ["P2", "2026-05-23 10:00", "Hoàn thành", "", "B200-1", "SP B", 100000, 1, 0],  # change date itself
+        ["P3", "2026-09-03 10:00", "Hoàn thành", "", "C300-1", "SP C", 100000, 1, 0],  # well after
+    ]
+    wb = Workbook()
+    ws = wb.active
+    ws.append(HEADERS)
+    for r in rows:
+        ws.append(r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    parquet_bytes, _, _ = excel_to_parquet(buf)
+    df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
+    by_order = df.set_index("orderId")
+    assert by_order.loc["P1", "piship"] == 1620
+    assert by_order.loc["P2", "piship"] == 2700
+    assert by_order.loc["P3", "piship"] == 2700
+
+
 def test_missing_orderid_column_raises():
     # "Mã đơn hàng" is required: Piship (flat fee per order, first line
     # only) and Voucher/Phí sàn proration both depend on being able to

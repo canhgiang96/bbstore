@@ -4,6 +4,8 @@ verify the JS deriveOrderStatus() during Phase 1 development (see the
 KPI sums: Doanh số 940.000, GMV 360.000, hủy chưa XK 150.000, hủy sau XK
 200.000, hoàn 230.000 — 150.000 + 200.000 + 230.000 + 360.000 = 940.000).
 """
+from datetime import date, datetime
+
 from app.derive import (
     compute_discount,
     compute_piship_fee,
@@ -176,3 +178,28 @@ def test_compute_piship_fee_first_line_gets_full_amount():
 
 def test_compute_piship_fee_other_lines_get_zero():
     assert compute_piship_fee(is_first_line_of_order=False) == 0
+
+
+# Confirmed with the user 2026-09-03: Shopee raised Piship from 1.620 to
+# 2.700 starting exactly 23/05/2026, compared against the order's own date.
+def test_compute_piship_fee_uses_old_rate_before_change_date():
+    assert compute_piship_fee(True, datetime(2026, 5, 22)) == 1620
+
+
+def test_compute_piship_fee_uses_new_rate_on_change_date():
+    assert compute_piship_fee(True, datetime(2026, 5, 23)) == 2700
+
+
+def test_compute_piship_fee_uses_new_rate_after_change_date():
+    assert compute_piship_fee(True, datetime(2026, 9, 3)) == 2700
+
+
+def test_compute_piship_fee_defaults_to_old_rate_when_date_unknown():
+    # No date column mapped/parseable — don't silently assume the newer
+    # rate, matching quantity_known/status_known's caution elsewhere.
+    assert compute_piship_fee(True, None) == 1620
+    assert compute_piship_fee(True) == 1620
+
+
+def test_compute_piship_fee_accepts_plain_date_not_just_datetime():
+    assert compute_piship_fee(True, date(2026, 5, 23)) == 2700
