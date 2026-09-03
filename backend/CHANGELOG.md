@@ -414,6 +414,32 @@ hơn:**
     do/số tiền), verify bằng dữ liệu thật (2.817 dòng convert đúng).
   - `app/adjustments_to_parquet.py`.
 
+## 21. Fix công thức Voucher (Shopee): tổng theo đơn phải đúng bằng Mã giảm giá của Shop
+
+- **Bug thật, user yêu cầu sửa 2026-09-03**: "Mã giảm giá của Shop" là 1
+  số tiền cấp cho CẢ ĐƠN, lặp lại giống hệt nhau trên mọi dòng trong file
+  gốc — công thức cũ chia theo tỷ lệ "Số tiền người mua thanh toán" của
+  TOÀN BỘ đơn (trước khi trừ hàng hoàn), sau đó CÒN nhân thêm 1 lần nữa
+  với (Số lượng thực/Số lượng) cho riêng dòng đó → khi 1 đơn có hàng hoàn
+  1 phần, tổng Voucher cộng lại các dòng bị THIẾU so với số gốc (phần
+  giảm giá tương ứng SL hoàn bị "mất" thay vì chia lại cho các dòng còn
+  lại của đơn).
+  - Đã sửa: tỷ lệ chia Voucher giờ tính trực tiếp theo tỷ trọng "Số tiền
+    người mua thanh toán" ĐÃ QUY THEO Số lượng thực (không nhân thêm lần
+    2) — đảm bảo cộng Voucher của mọi dòng trong 1 đơn LUÔN bằng đúng Mã
+    giảm giá của Shop gốc, kể cả khi có hàng hoàn. Đã verify: đơn 2 dòng,
+    dòng 1 hoàn 1/2 sản phẩm, tổng Voucher = đúng 10.000 (khớp số gốc)
+    thay vì bị hụt như công thức cũ.
+  - Phí sàn/Phí AFF (`orderPaidRatio`) hoàn toàn KHÔNG bị ảnh hưởng —
+    vẫn tính theo số tiền thanh toán gốc trước hoàn hàng như cũ, đúng
+    nguyên tắc "phí sàn đã phát sinh thì không được hoàn lại" đã xác nhận
+    trước đây.
+  - `app/derive.py` (`compute_voucher` đổi signature, nhận thẳng tỷ lệ đã
+    tính sẵn thay vì tự nhân lại theo Số lượng thực), `app/
+    excel_to_parquet.py` (`_order_paid_kept_totals`/`_order_kept_qty_totals`
+    mới — tỷ lệ Voucher riêng, tách khỏi `order_paid_ratio` dùng chung cho
+    Phí sàn/Phí AFF).
+
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 
 - **Đa kênh khác (Lazada,...)**: áp dụng cách làm tương tự mục 10/11 khi có

@@ -146,17 +146,17 @@ def test_compute_discount_zero_quantity_is_safe():
 
 def test_compute_voucher_single_line_order_full_ratio():
     # Đơn chỉ có 1 dòng sản phẩm -> tỉ lệ = 100%.
-    assert compute_voucher(shop_voucher=20000, order_paid_ratio=1.0, quantity=2, so_luong_thuc=2) == 20000
+    assert compute_voucher(shop_voucher=20000, voucher_ratio=1.0) == 20000
 
 
 def test_compute_voucher_prorated_across_multi_line_order():
-    # Dòng này chiếm 30% tổng số tiền thanh toán của đơn.
-    voucher = compute_voucher(shop_voucher=20000, order_paid_ratio=0.3, quantity=2, so_luong_thuc=2)
+    # Dòng này chiếm 30% tỉ trọng (đã tính theo Số lượng thực) của đơn.
+    voucher = compute_voucher(shop_voucher=20000, voucher_ratio=0.3)
     assert voucher == 6000
 
 
-def test_compute_voucher_zero_quantity_is_safe():
-    assert compute_voucher(shop_voucher=20000, order_paid_ratio=1.0, quantity=0, so_luong_thuc=0) == 0
+def test_compute_voucher_zero_ratio_is_safe():
+    assert compute_voucher(shop_voucher=20000, voucher_ratio=0.0) == 0
 
 
 def test_compute_platform_fee_prorated_by_order_paid_ratio():

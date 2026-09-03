@@ -131,18 +131,26 @@ def compute_discount(seller_subsidy: float, quantity: float, so_luong_thuc: floa
     return (seller_subsidy / quantity) * so_luong_thuc
 
 
-def compute_voucher(shop_voucher: float, order_paid_ratio: float, quantity: float, so_luong_thuc: float) -> float:
+def compute_voucher(shop_voucher: float, voucher_ratio: float) -> float:
     """Mã giảm giá của Shop is an order-level amount Shopee repeats on every
-    line of a multi-line order, so it's prorated by order_paid_ratio — this
-    line's share of "Số tiền người mua thanh toán" summed across the whole
-    order (1.0 when the order has only one line).
+    line of a multi-line order, so it's prorated by voucher_ratio — this
+    line's normalized share (summing to 1 across the whole order) of
+    whichever proration basis the caller chose.
 
-    Voucher (per unit) = Mã giảm giá của Shop x order_paid_ratio / Số lượng.
-    Voucher trên dashboard = Voucher x Số lượng thực.
+    voucher_ratio is deliberately NOT the same order_paid_ratio used for
+    Phí sàn/Phí AFF — it's weighted by Số lượng thực (kept, non-returned
+    quantity) instead of the order's full pre-return amounts, so summing
+    Voucher back across an order's lines always reconciles exactly to that
+    order's own Mã giảm giá của Shop, including when a return shrinks one
+    line's share (confirmed with the user 2026-09-03 — the previous
+    formula reused order_paid_ratio, computed from full pre-return
+    amounts, then shrank the result again by Số lượng thực/Số lượng for
+    just that line — a return silently lost part of the voucher instead
+    of reallocating it to the order's other lines). See
+    excel_to_parquet._order_paid_kept_totals/_order_kept_qty_totals for
+    how voucher_ratio is actually computed.
     """
-    if not quantity:
-        return 0.0
-    return (shop_voucher * order_paid_ratio / quantity) * so_luong_thuc
+    return shop_voucher * voucher_ratio
 
 
 PISHIP_FEE_PER_ORDER = 1620

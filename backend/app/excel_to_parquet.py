@@ -98,9 +98,13 @@ def _text_or_empty(row: dict, mapping: dict, field_key: str) -> str:
 
 def _order_paid_totals(raw_rows: list[dict], mapping: dict) -> dict:
     """Sums "Số tiền người mua thanh toán" per Mã đơn hàng across every raw
-    row (before date-filtering) — the denominator used to prorate the
-    order-level "Mã giảm giá của Shop" voucher fairly across an order's
-    lines by each line's share of what the buyer actually paid.
+    row (before date-filtering) — the denominator for order_paid_ratio,
+    which prorates Phí sàn (and is persisted as "orderPaidRatio" for the
+    query-time Phí AFF join) by each line's share of what the buyer paid
+    for the FULL (pre-return) order — deliberately not reduced for a
+    return, since a platform fee already incurred isn't refunded by one.
+    NOT used for Voucher — see _order_paid_kept_totals below for why that
+    needs a different denominator.
     """
     order_col = mapping.get("orderId")
     paid_col = mapping.get("buyerPaidAmount")
@@ -114,14 +118,14 @@ def _order_paid_totals(raw_rows: list[dict], mapping: dict) -> dict:
 
 
 def _order_fallback_weight_totals(raw_rows: list[dict], mapping: dict) -> dict:
-    """Fallback proration denominator for when "Số tiền người mua thanh
-    toán" isn't mapped, so _order_paid_totals is empty and Voucher/Phí sàn
-    would otherwise always come out 0 for the whole report (order_paid_ratio
-    dividing by a missing total). Prorates by "Số lượng" (quantity share)
-    instead — summing the resulting ratio back across an order's lines
-    reconciles to the order-level total instead of silently losing it.
-    "orderId"/"quantity" are both required fields (see mapping.FIELDS), so
-    both columns are always present here.
+    """Fallback proration denominator for order_paid_ratio when "Số tiền
+    người mua thanh toán" isn't mapped, so _order_paid_totals is empty and
+    Phí sàn would otherwise always come out 0 for the whole report
+    (order_paid_ratio dividing by a missing total). Prorates by "Số lượng"
+    (quantity share) instead — summing the resulting ratio back across an
+    order's lines reconciles to the order-level total instead of silently
+    losing it. "orderId"/"quantity" are both required fields (see
+    mapping.FIELDS), so both columns are always present here.
     """
     order_col = mapping["orderId"]
     qty_col = mapping["quantity"]
@@ -129,6 +133,56 @@ def _order_fallback_weight_totals(raw_rows: list[dict], mapping: dict) -> dict:
     for row in raw_rows:
         order_id = row.get(order_col)
         totals[order_id] = totals.get(order_id, 0.0) + to_number(row.get(qty_col))
+    return totals
+
+
+def _order_paid_kept_totals(raw_rows: list[dict], mapping: dict) -> dict:
+    """Sums each line's "Số tiền người mua thanh toán", scaled down to its
+    own Số lượng thực (kept, non-returned) share of Số lượng — per Mã đơn
+    hàng — the denominator for prorating Voucher, so summing it back
+    across an order's lines always reconciles exactly to that order's own
+    "Mã giảm giá của Shop" regardless of any return.
+
+    Confirmed with the user 2026-09-03: reusing order_paid_ratio (full,
+    pre-return amounts) for Voucher and then shrinking just that one
+    line's result by Số lượng thực/Số lượng silently lost part of the
+    voucher on a return instead of reallocating it to the order's other
+    lines — this is the fix, a dedicated ratio weighted by kept quantity
+    from the start.
+    """
+    order_col = mapping.get("orderId")
+    paid_col = mapping.get("buyerPaidAmount")
+    qty_col = mapping.get("quantity")
+    returned_col = mapping.get("returnedQty")
+    totals: dict = {}
+    if not order_col or not paid_col:
+        return totals
+    for row in raw_rows:
+        order_id = row.get(order_col)
+        quantity = to_number(row.get(qty_col)) if qty_col else 0.0
+        returned_qty = to_number(row.get(returned_col)) if returned_col else 0.0
+        so_luong_thuc = quantity - returned_qty
+        paid = to_number(row.get(paid_col))
+        weight = (paid / quantity * so_luong_thuc) if quantity else 0.0
+        totals[order_id] = totals.get(order_id, 0.0) + weight
+    return totals
+
+
+def _order_kept_qty_totals(raw_rows: list[dict], mapping: dict) -> dict:
+    """Fallback Voucher-proration denominator for when "Số tiền người mua
+    thanh toán" isn't mapped — sums Số lượng thực (not Số lượng) per Mã
+    đơn hàng, same reasoning as _order_paid_kept_totals above but with no
+    per-unit price to weight by.
+    """
+    order_col = mapping["orderId"]
+    qty_col = mapping["quantity"]
+    returned_col = mapping.get("returnedQty")
+    totals: dict = {}
+    for row in raw_rows:
+        order_id = row.get(order_col)
+        quantity = to_number(row.get(qty_col))
+        returned_qty = to_number(row.get(returned_col)) if returned_col else 0.0
+        totals[order_id] = totals.get(order_id, 0.0) + (quantity - returned_qty)
     return totals
 
 
@@ -142,6 +196,8 @@ def build_dashboard_rows(raw_rows: list[dict], mapping: dict, sales_channel_name
     apply_piship = channel_has_piship(sales_channel_name)
     order_paid_totals = _order_paid_totals(raw_rows, mapping)
     order_fallback_weight_totals = {} if paid_col else _order_fallback_weight_totals(raw_rows, mapping)
+    order_paid_kept_totals = _order_paid_kept_totals(raw_rows, mapping) if paid_col else {}
+    order_kept_qty_totals = {} if paid_col else _order_kept_qty_totals(raw_rows, mapping)
     seen_order_ids: set = set()
     out = []
 
@@ -165,6 +221,15 @@ def build_dashboard_rows(raw_rows: list[dict], mapping: dict, sales_channel_name
             order_total_paid = order_paid_totals.get(row.get(order_col))
             line_paid = to_number(row.get(paid_col))
             order_paid_ratio = (line_paid / order_total_paid) if order_total_paid else 0.0
+
+            # Voucher-only ratio, weighted by kept (post-return) quantity
+            # from the start — see _order_paid_kept_totals for why this
+            # can't just reuse order_paid_ratio above.
+            order_total_kept_paid = order_paid_kept_totals.get(row.get(order_col))
+            line_kept_paid = (
+                (line_paid / derived["quantity"] * derived["soLuongThuc"]) if derived["quantity"] else 0.0
+            )
+            voucher_ratio = (line_kept_paid / order_total_kept_paid) if order_total_kept_paid else 0.0
         else:
             # "Số tiền người mua thanh toán" isn't mapped (unlike the
             # required fields, this one legitimately isn't always present
@@ -173,6 +238,9 @@ def build_dashboard_rows(raw_rows: list[dict], mapping: dict, sales_channel_name
             order_total_weight = order_fallback_weight_totals.get(row.get(order_col))
             line_weight = derived["quantity"]
             order_paid_ratio = (line_weight / order_total_weight) if order_total_weight else 0.0
+
+            order_total_kept_qty = order_kept_qty_totals.get(row.get(order_col))
+            voucher_ratio = (derived["soLuongThuc"] / order_total_kept_qty) if order_total_kept_qty else 0.0
 
         if mapping.get("discountAmount"):
             # Already the exact final per-line amount (e.g. the in-house
@@ -186,7 +254,7 @@ def build_dashboard_rows(raw_rows: list[dict], mapping: dict, sales_channel_name
             discount = abs(to_number(row.get(mapping["discountAmount"])))
         else:
             discount = compute_discount(seller_subsidy, derived["quantity"], derived["soLuongThuc"])
-        voucher = compute_voucher(shop_voucher, order_paid_ratio, derived["quantity"], derived["soLuongThuc"])
+        voucher = compute_voucher(shop_voucher, voucher_ratio)
 
         fixed_fee = to_number(row.get(mapping["fixedFee"])) if mapping.get("fixedFee") else 0.0
         service_fee = to_number(row.get(mapping["serviceFee"])) if mapping.get("serviceFee") else 0.0

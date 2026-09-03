@@ -3,6 +3,7 @@ import re
 import zipfile
 
 import pyarrow.parquet as pq
+import pytest
 from openpyxl import Workbook
 
 from app.excel_to_parquet import MappingError, excel_to_parquet, get_original_headers, read_excel_rows
@@ -226,9 +227,12 @@ def test_discount_and_voucher_prorated_across_multi_line_order():
     assert line1["discount"] == 4000 / 2 * 2
     assert line2["discount"] == 6000 / 1 * 1
 
-    # line1 is 300.000/1.000.000 = 30% of the order's paid amount; line2 is 70%.
-    assert line1["voucher"] == 10000 * 0.3 / 2 * 2
-    assert line2["voucher"] == 10000 * 0.7 / 1 * 1
+    # line1 is 300.000/1.000.000 = 30% of the order's paid amount; line2 is
+    # 70% — no returns here so this matches both the old and new voucher
+    # formula (see test_voucher_sums_to_shop_voucher_even_with_a_return
+    # below for where they diverge).
+    assert line1["voucher"] == 10000 * 0.3
+    assert line2["voucher"] == 10000 * 0.7
 
     # Single-line order -> ratio is exactly 100%, so voucher == the shop's
     # full voucher value for that line (no proration needed).
@@ -240,6 +244,49 @@ def test_discount_and_voucher_prorated_across_multi_line_order():
     assert line1["orderPaidRatio"] == 0.3
     assert line2["orderPaidRatio"] == 0.7
     assert single["orderPaidRatio"] == 1.0
+
+
+VOUCHER_RETURN_HEADERS = HEADERS + ["Người bán trợ giá", "Mã giảm giá của Shop", "Số tiền người mua thanh toán"]
+
+VOUCHER_RETURN_ROWS = [
+    # R1: 2-line order, line 1 has a partial return (1 of 2 units). Mã
+    # giảm giá của Shop (10.000) is repeated on both lines as usual.
+    ["R1", "2026-02-01 00:01", "Hoàn 1 phần", "", "A100-1", "SP A", 100000, 2, 1, 0, 10000, 300000],
+    ["R1", "2026-02-01 00:01", "Hoàn thành", "", "B200-1", "SP B", 150000, 1, 0, 0, 10000, 700000],
+]
+
+
+def test_voucher_sums_to_shop_voucher_even_with_a_return():
+    # Confirmed with the user 2026-09-03: Voucher summed across an order's
+    # lines must always reconcile exactly to that order's own "Mã giảm giá
+    # của Shop", even when one line has a return — the old formula
+    # (reusing order_paid_ratio, computed from the FULL pre-return amount,
+    # then shrinking just that line's result by Số lượng thực/Số lượng)
+    # silently lost part of the voucher on a return instead of
+    # reallocating it to the order's other lines.
+    wb = Workbook()
+    ws = wb.active
+    ws.append(VOUCHER_RETURN_HEADERS)
+    for r in VOUCHER_RETURN_ROWS:
+        ws.append(r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    parquet_bytes, _, _ = excel_to_parquet(buf)
+    df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
+    by_sku = df.set_index("skuVariant")
+
+    # Weighted by kept (post-return) payment share: line1's "kept" paid
+    # share = 300000/2*1=150000, line2's = 700000/1*1=700000, total 850000.
+    assert by_sku.loc["A100-1", "voucher"] == pytest.approx(10000 * 150000 / 850000)
+    assert by_sku.loc["B200-1", "voucher"] == pytest.approx(10000 * 700000 / 850000)
+    assert df["voucher"].sum() == pytest.approx(10000)
+
+    # order_paid_ratio (Phí sàn/Phí AFF's own proration) is untouched by
+    # this fix — still based on the FULL pre-return payment amount.
+    assert by_sku.loc["A100-1", "orderPaidRatio"] == pytest.approx(0.3)
+    assert by_sku.loc["B200-1", "orderPaidRatio"] == pytest.approx(0.7)
 
 
 def test_discount_and_voucher_default_to_zero_when_columns_absent():
@@ -481,6 +528,43 @@ def test_voucher_and_platform_fee_fall_back_to_quantity_share_when_buyerpaidamou
     assert single["orderPaidRatio"] == 1.0
     assert single["platformFee"] == 1000
     assert single["voucher"] == 5000
+
+
+def test_voucher_fallback_ratio_also_sums_to_shop_voucher_with_a_return():
+    # Same invariant as test_voucher_sums_to_shop_voucher_even_with_a_return,
+    # but for the no-"Số tiền người mua thanh toán" fallback path — Voucher
+    # is weighted by Số lượng thực (not Số lượng) there too.
+    override = {
+        "date": "Ngày đặt hàng", "orderId": "Mã đơn hàng", "quantity": "Số lượng",
+        "originalPrice": "Giá gốc", "returnedQty": "Số lượng sản phẩm được hoàn trả",
+        "status": "Trạng Thái Đơn Hàng", "cancelReason": "Lý do hủy",
+        "skuVariant": "SKU phân loại hàng", "shopVoucher": "Mã giảm giá của Shop",
+        # "buyerPaidAmount" deliberately omitted.
+    }
+    wb = Workbook()
+    ws = wb.active
+    ws.append(VOUCHER_RETURN_HEADERS)
+    for r in VOUCHER_RETURN_ROWS:
+        ws.append(r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    parquet_bytes, _, mapping = excel_to_parquet(buf, mapping_override=override)
+    assert "buyerPaidAmount" not in mapping
+    df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
+    by_sku = df.set_index("skuVariant")
+
+    # Kept quantity: line1 soLuongThuc=1, line2 soLuongThuc=1, total 2 ->
+    # split 50/50, NOT the pre-return 2:1 quantity split.
+    assert by_sku.loc["A100-1", "voucher"] == pytest.approx(5000)
+    assert by_sku.loc["B200-1", "voucher"] == pytest.approx(5000)
+    assert df["voucher"].sum() == pytest.approx(10000)
+
+    # order_paid_ratio (Phí sàn's own proration) is untouched — still the
+    # pre-return 2:1 quantity split.
+    assert by_sku.loc["A100-1", "orderPaidRatio"] == pytest.approx(2 / 3)
+    assert by_sku.loc["B200-1", "orderPaidRatio"] == pytest.approx(1 / 3)
 
 
 def test_platform_fee_and_piship_default_to_zero_when_columns_absent():
