@@ -440,6 +440,26 @@ hơn:**
     mới — tỷ lệ Voucher riêng, tách khỏi `order_paid_ratio` dùng chung cho
     Phí sàn/Phí AFF).
 
+## 22. Nút "Chuyển đổi lại" — reconvert Report mà không cần chọn lại Kênh bán hàng
+
+- **User hỏi 2026-09-03**: sau khi sửa công thức Phí Piship (mục 19) và
+  Voucher (mục 21), Report đã upload từ trước không tự cập nhật số liệu
+  (Parquet được tính 1 lần lúc convert, không tự tính lại khi công thức
+  đổi). Cách duy nhất trước đây để ép tính lại là chọn lại đúng Kênh bán
+  hàng đang có (PATCH `/channel` vô tình có side effect reconvert) — user
+  hỏi có cách nào không phải làm thao tác "giả" đó không.
+  - Đã thêm endpoint mới `POST /{report_id}/reconvert` cho **cả 6 loại
+    Report** (Đơn hàng, Dòng tiền, Combo, Master File, Điều chỉnh doanh
+    thu, Kênh AFF) — tải lại file gốc đã upload, chuyển đổi lại với đúng
+    mapping cột đã lưu (và Kênh bán hàng hiện tại nếu có), ghi đè Parquet
+    cũ trên R2, invalidate cache local, cập nhật `row_count`/`mapping`.
+  - `app/routers/_report_crud.py`: tách logic reconvert dùng chung
+    thành `_reconvert_report()`, dùng lại cho cả endpoint mới lẫn PATCH
+    `/channel` cũ (hành vi PATCH không đổi, chỉ gọn code hơn).
+  - Frontend: mỗi dòng Report trong danh sách có thêm nút "Chuyển đổi
+    lại" (cạnh nút Khóa/Xóa), disable khi Report đang `processing`, có
+    confirm trước khi chạy.
+
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 
 - **Đa kênh khác (Lazada,...)**: áp dụng cách làm tương tự mục 10/11 khi có
@@ -449,7 +469,7 @@ hơn:**
 
 Mỗi lần sửa `frontend/js/app.js` hoặc `frontend/index.html`, nhớ tăng số
 `?v=N` ở 2 dòng `<script src="js/...">` cuối `index.html` — nếu không trình
-duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=40**.
+duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=41**.
 
 ## 9. Tối ưu hóa code (reuse/simplification/efficiency)
 

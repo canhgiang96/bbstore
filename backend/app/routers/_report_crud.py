@@ -176,6 +176,52 @@ def create_report_crud_router(
             raise HTTPException(status_code=404, detail="Không tìm thấy Report.")
         return ReportDetailOut(**row)
 
+    async def _reconvert_report(report_id: str, row: dict, channel_name: str | None) -> dict:
+        """Re-downloads this Report's original .xlsx and reconverts it with
+        its already-resolved column mapping — shared by update_channel
+        (Piship gating needs to apply under a newly-picked channel) and the
+        explicit /reconvert endpoint below (a business-rule/formula fix
+        ships and an already-converted Report's stored Parquet needs to
+        catch up, without faking a channel change just to trigger it).
+        """
+        if not row.get("original_xlsx_key"):
+            raise HTTPException(status_code=409, detail="Report chưa có file gốc để chuyển đổi lại.")
+        with tempfile.NamedTemporaryFile(suffix=".xlsx") as tmp:
+            await run_in_threadpool(storage.download_to_path, row["original_xlsx_key"], tmp.name)
+            kwargs = {"mapping_override": row.get("mapping")}
+            if channel_aware_converter:
+                kwargs["sales_channel_name"] = channel_name
+            try:
+                parquet_bytes, row_count, mapping = await convert_with_backpressure(converter, tmp.name, **kwargs)
+            except mapping_error as e:
+                raise HTTPException(status_code=400, detail=str(e) or repr(e))
+        await run_in_threadpool(
+            storage.upload_bytes, parquet_key_fn(report_id), parquet_bytes, "application/octet-stream"
+        )
+        invalidate_local_parquet_cache(report_id)
+        await db.pg_update(table, {"id": f"eq.{report_id}"}, {"mapping": mapping, "row_count": row_count})
+        return {"ok": True, "rowCount": row_count}
+
+    @router.post("/{report_id}/reconvert")
+    async def reconvert_report(report_id: str, user: dict = Depends(require_admin)):
+        """Re-runs the converter on this Report's already-uploaded original
+        file, using its existing column mapping and (if applicable) its
+        current Kênh bán hàng — for when a business-rule/formula fix ships
+        (e.g. Phí Piship's rate change, Voucher's proration formula,
+        2026-09-03) and an already-converted Report's stored Parquet needs
+        to catch up. Previously the only way to force this was to re-pick
+        the same channel in the Kênh bán hàng dropdown (which happens to
+        also reconvert) — this is the same reconversion, just direct.
+        """
+        row = await db.pg_select_one(table, {"id": f"eq.{report_id}"})
+        if not row:
+            raise HTTPException(status_code=404, detail="Không tìm thấy Report.")
+        channel_name = None
+        if channel_aware_converter and row.get("sales_channel_id"):
+            channel_row = await db.pg_select_one("sales_channels", {"id": f"eq.{row['sales_channel_id']}"})
+            channel_name = channel_row["name"] if channel_row else None
+        return await _reconvert_report(report_id, row, channel_name)
+
     if has_channel:
 
         @router.patch("/{report_id}/channel")
@@ -198,16 +244,7 @@ def create_report_crud_router(
                     else None
                 )
                 channel_name = channel_row["name"] if channel_row else None
-                with tempfile.NamedTemporaryFile(suffix=".xlsx") as tmp:
-                    await run_in_threadpool(storage.download_to_path, row["original_xlsx_key"], tmp.name)
-                    parquet_bytes, row_count, mapping = await convert_with_backpressure(
-                        converter, tmp.name, mapping_override=row.get("mapping"), sales_channel_name=channel_name
-                    )
-                await run_in_threadpool(
-                    storage.upload_bytes, parquet_key_fn(report_id), parquet_bytes, "application/octet-stream"
-                )
-                invalidate_local_parquet_cache(report_id)
-                await db.pg_update(table, {"id": f"eq.{report_id}"}, {"mapping": mapping, "row_count": row_count})
+                await _reconvert_report(report_id, row, channel_name)
 
             return {"ok": True}
 

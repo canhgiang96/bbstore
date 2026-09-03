@@ -191,6 +191,7 @@
             ${cols.map(c => `<td>${c.cell(r, isAdmin)}</td>`).join("")}
             ${isAdmin ? `<td>
                 <button class="btn btn-ghost btn-sm" data-lock="${escapeHtml(r.id)}" data-locked="${r.locked ? "1" : "0"}">${r.locked ? "Mở khóa" : "Khóa"}</button>
+                <button class="btn btn-ghost btn-sm" data-reconvert="${escapeHtml(r.id)}"${r.status === "processing" ? " disabled" : ""} title="Đọc lại file gốc và tính lại toàn bộ (dùng khi công thức tính thay đổi)">Chuyển đổi lại</button>
                 <button class="btn btn-danger btn-sm" data-del="${escapeHtml(r.id)}"${r.locked ? ' disabled title="Report đã khóa — mở khóa trước khi xóa"' : ""}>Xóa</button>
               </td>` : ""}
           </tr>`;
@@ -227,6 +228,25 @@
               await refresh();
             } catch (err) {
               alert("Lỗi khóa/mở khóa Report: " + err.message);
+            }
+          };
+        });
+        body.querySelectorAll("button[data-reconvert]").forEach(btn => {
+          btn.onclick = async () => {
+            const id = btn.dataset.reconvert;
+            const report = reports.find(r => r.id === id);
+            if (!confirm(`Đọc lại file gốc và tính lại toàn bộ dữ liệu cho "${report ? report.name : id}"?`)) return;
+            const originalText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = "Đang xử lý...";
+            try {
+              await API.apiJson(`${endpoint}/${id}/reconvert`, { method: "POST" });
+              await refresh();
+              if (afterChange) afterChange();
+            } catch (err) {
+              alert("Lỗi chuyển đổi lại: " + err.message);
+              btn.disabled = false;
+              btn.textContent = originalText;
             }
           };
         });
