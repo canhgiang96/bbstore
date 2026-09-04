@@ -7,12 +7,14 @@ KPI sums: Doanh số 940.000, GMV 360.000, hủy chưa XK 150.000, hủy sau XK
 from datetime import date, datetime
 
 from app.derive import (
+    channel_has_piship,
     compute_discount,
     compute_piship_fee,
     compute_platform_fee,
     compute_voucher,
     derive_order_status,
     derive_row_fields,
+    normalize_combined_sales_channel,
 )
 
 MAPPING = {
@@ -203,3 +205,36 @@ def test_compute_piship_fee_defaults_to_old_rate_when_date_unknown():
 
 def test_compute_piship_fee_accepts_plain_date_not_just_datetime():
     assert compute_piship_fee(True, date(2026, 5, 23)) == 2700
+
+
+def test_channel_has_piship_none_defaults_to_true():
+    # No channel picked at upload time -> preserve old always-on behavior.
+    assert channel_has_piship(None) is True
+
+
+def test_channel_has_piship_shopee_case_and_whitespace_insensitive():
+    assert channel_has_piship("Shopee") is True
+    assert channel_has_piship(" shopee ") is True
+
+
+def test_channel_has_piship_false_for_other_channels():
+    assert channel_has_piship("TikTok Shop") is False
+    assert channel_has_piship("") is False
+
+
+def test_normalize_combined_sales_channel_known_values():
+    assert normalize_combined_sales_channel("HaraSocial") == "HARA"
+    assert normalize_combined_sales_channel("POS") == "31 LVS"
+    assert normalize_combined_sales_channel("Web") == "WEBSITE"
+
+
+def test_normalize_combined_sales_channel_zalo_matches_by_substring():
+    # Zalo is checked separately (not via COMBINED_SALES_CHANNEL_MAP) since
+    # the raw value varies more than the other 3 (e.g. "Zalo OA").
+    assert normalize_combined_sales_channel("Zalo") == "ZALO"
+    assert normalize_combined_sales_channel("Zalo OA") == "ZALO"
+
+
+def test_normalize_combined_sales_channel_unknown_or_blank_returns_empty():
+    assert normalize_combined_sales_channel("") == ""
+    assert normalize_combined_sales_channel("Lazada") == ""
