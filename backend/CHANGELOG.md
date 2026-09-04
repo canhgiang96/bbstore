@@ -459,6 +459,19 @@ hơn:**
   - Frontend: mỗi dòng Report trong danh sách có thêm nút "Chuyển đổi
     lại" (cạnh nút Khóa/Xóa), disable khi Report đang `processing`, có
     confirm trước khi chạy.
+- **Vá sau khi code review 2026-09-03**: bug nghiêm trọng — endpoint mới
+  gửi `mapping_override` cho **cả 6 converter**, nhưng chỉ `excel_to_parquet`
+  (Đơn hàng) nhận tham số này; 5 converter còn lại raise `TypeError` →
+  lỗi 500 chưa xử lý. Nghĩa là nút "Chuyển đổi lại" chỉ thực sự chạy được
+  cho Đơn hàng, còn 5 loại Report kia bấm vào là lỗi. Đã sửa: thêm cờ
+  `supports_mapping_override` (chỉ `true` cho Đơn hàng) để chỉ gửi kwarg
+  này khi converter thực sự hỗ trợ. Đồng thời vá thêm 3 lỗi khác phát
+  hiện cùng lúc: (1) không có guard khi Report đang `processing` → có thể
+  chạy 2 lần convert chồng nhau; (2) reconvert thành công không set lại
+  `status`/`parquet_key`, nên 1 Report từng `failed` mà reconvert lại
+  thành công sẽ mãi mãi không hiện lên Dashboard; (3) chỉ bắt lỗi
+  `mapping_error`, lỗi khác (file hỏng, timeout R2...) sẽ crash 500 thay
+  vì trả về lỗi rõ ràng.
 
 ## 23. Ô lọc (Trạng thái/Kênh bán hàng/...) hiện tất cả giá trị, không phụ thuộc khoảng thời gian đang chọn
 
@@ -475,7 +488,16 @@ hơn:**
   - `app/query_engine.py` (`run_summary_query`): bảng tạm `orders_working`
     được build lại 1 lần nữa (không truyền from_date/to_date) ngay trước
     khi tính facets, sau khi mọi truy vấn KPI/timeline/top_n ở trên đã
-    chạy xong trên bản có lọc thời gian như cũ.
+    chạy xong trên bản có lọc thời gian như cũ. Bỏ qua bước build lại này
+    khi không có bộ lọc thời gian nào (build lại sẽ y hệt bản đã có).
+  - **Đánh đổi hiệu năng đã biết**: khi CÓ chọn khoảng thời gian (vd mặc
+    định "Tháng này"), mỗi lần load Dashboard giờ chạy join
+    Combo/Dòng tiền/Master/AFF **2 lần** (1 lần theo thời gian cho
+    KPI, 1 lần không giới hạn cho ô lọc) thay vì 1 lần như trước — chấp
+    nhận đánh đổi này để ô lọc luôn đủ giá trị; nếu sau này dữ liệu lớn
+    lên nhiều và thấy chậm/tốn RAM rõ rệt, cần cân nhắc tách hẳn 1 query
+    nhẹ chỉ lấy danh sách giá trị riêng thay vì build lại toàn bộ
+    `orders_working`.
 
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 

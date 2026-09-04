@@ -35,6 +35,10 @@ router = create_report_crud_router(
     # excel_to_parquet accepts sales_channel_name to gate Phí Piship
     # (Shopee-only) — see derive.channel_has_piship.
     channel_aware_converter=True,
+    # excel_to_parquet is the only converter that accepts mapping_override
+    # (the other 5 Report types have no "Chỉnh cột" mapping-override
+    # concept) — see _reconvert_report's kwargs-building in _report_crud.py.
+    supports_mapping_override=True,
 )
 
 

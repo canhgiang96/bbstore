@@ -67,6 +67,7 @@ def create_report_crud_router(
     mapping_error: type[Exception],
     has_channel: bool = False,
     channel_aware_converter: bool = False,
+    supports_mapping_override: bool = False,
 ) -> APIRouter:
     router = APIRouter(prefix=prefix, tags=[tag])
 
@@ -186,20 +187,48 @@ def create_report_crud_router(
         """
         if not row.get("original_xlsx_key"):
             raise HTTPException(status_code=409, detail="Report chưa có file gốc để chuyển đổi lại.")
+        if row.get("status") == "processing":
+            # original_xlsx_key is written at upload time, before the
+            # background _process_report task actually runs — without this
+            # guard, firing /reconvert in that window starts a second,
+            # uncoordinated conversion racing the first one, and whichever
+            # finishes last silently wins (same parquet_key, same DB row).
+            raise HTTPException(status_code=409, detail="Report đang xử lý, vui lòng đợi xong rồi thử lại.")
         with tempfile.NamedTemporaryFile(suffix=".xlsx") as tmp:
             await run_in_threadpool(storage.download_to_path, row["original_xlsx_key"], tmp.name)
-            kwargs = {"mapping_override": row.get("mapping")}
+            # Only excel_to_parquet (Orders) actually accepts these kwargs —
+            # the other 5 converters are plain (file_like, sheet_name=0) with
+            # no **kwargs, so passing mapping_override/sales_channel_name to
+            # them unconditionally raises TypeError. Each flag mirrors
+            # whether that Report type's own converter supports the kwarg.
+            kwargs = {}
+            if supports_mapping_override:
+                kwargs["mapping_override"] = row.get("mapping")
             if channel_aware_converter:
                 kwargs["sales_channel_name"] = channel_name
             try:
                 parquet_bytes, row_count, mapping = await convert_with_backpressure(converter, tmp.name, **kwargs)
             except mapping_error as e:
                 raise HTTPException(status_code=400, detail=str(e) or repr(e))
+            except Exception as e:  # noqa: BLE001 — mirror _process_report's safety net so a
+                # bad/corrupt original file (or a converter bug) surfaces as
+                # a clean 4xx instead of an unhandled 500 with the Report
+                # left in whatever state it was already in.
+                raise HTTPException(status_code=400, detail=f"Lỗi xử lý: {str(e) or repr(e)}")
         await run_in_threadpool(
             storage.upload_bytes, parquet_key_fn(report_id), parquet_bytes, "application/octet-stream"
         )
         invalidate_local_parquet_cache(report_id)
-        await db.pg_update(table, {"id": f"eq.{report_id}"}, {"mapping": mapping, "row_count": row_count})
+        await db.pg_update(
+            table,
+            {"id": f"eq.{report_id}"},
+            {
+                "status": "ready",
+                "row_count": row_count,
+                "mapping": mapping,
+                "parquet_key": parquet_key_fn(report_id),
+            },
+        )
         return {"ok": True, "rowCount": row_count}
 
     @router.post("/{report_id}/reconvert")

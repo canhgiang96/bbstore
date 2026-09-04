@@ -136,7 +136,7 @@ async def test_reconvert_report_success(monkeypatch):
     monkeypatch.setattr(storage, "upload_bytes", fake_upload_bytes)
     monkeypatch.setattr(_report_crud, "invalidate_local_parquet_cache", lambda report_id: invalidated.append(report_id))
 
-    router = _make_router(converter=fake_converter)
+    router = _make_router(converter=fake_converter, supports_mapping_override=True)
     route = _find_route(router, "POST", "/api/reports/{report_id}/reconvert")
 
     result = await route.endpoint("r1", user={"id": "u1"})
@@ -144,7 +144,10 @@ async def test_reconvert_report_success(monkeypatch):
     assert result == {"ok": True, "rowCount": 7}
     assert uploaded["key"] == "y"  # from parquet_key_fn stub
     assert invalidated == ["r1"]
-    assert updates == [("reports", {"id": "eq.r1"}, {"mapping": {"orderId": "Mã đơn hàng"}, "row_count": 7})]
+    assert updates == [(
+        "reports", {"id": "eq.r1"},
+        {"status": "ready", "row_count": 7, "mapping": {"orderId": "Mã đơn hàng"}, "parquet_key": "y"},
+    )]
 
 
 @pytest.mark.asyncio
@@ -161,6 +164,121 @@ async def test_reconvert_report_missing_report_404(monkeypatch):
         await route.endpoint("missing", user={"id": "u1"})
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_reconvert_report_processing_returns_409(monkeypatch):
+    # original_xlsx_key is written at upload time, before the background
+    # conversion task actually runs — a Report can be "processing" while
+    # already having original_xlsx_key set. Firing /reconvert in that
+    # window must not start a second, uncoordinated conversion.
+    async def fake_pg_select_one(table, params=None):
+        return {"id": "r1", "original_xlsx_key": "orig/r1.xlsx", "mapping": {}, "status": "processing"}
+
+    monkeypatch.setattr(db, "pg_select_one", fake_pg_select_one)
+
+    router = _make_router()
+    route = _find_route(router, "POST", "/api/reports/{report_id}/reconvert")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await route.endpoint("r1", user={"id": "u1"})
+
+    assert exc_info.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_reconvert_report_does_not_pass_mapping_override_when_unsupported(monkeypatch):
+    # Regression test: only excel_to_parquet (Orders) accepts a
+    # mapping_override kwarg — the other 5 real converters (cashflow,
+    # combo, master, adjustments, aff-channel) are plain (file_like,
+    # sheet_name=0) with no **kwargs, so passing mapping_override to them
+    # raised TypeError -> unhandled 500 before this was fixed. Uses a
+    # converter with that exact restrictive signature (no supports_
+    # mapping_override on the router, matching those 5 real report types)
+    # to prove the kwarg is never sent.
+    async def fake_pg_select_one(table, params=None):
+        return {"id": "r1", "original_xlsx_key": "orig/r1.xlsx", "mapping": {"orderId": "Mã đơn hàng"}}
+
+    async def fake_pg_update(table, params, data):
+        pass
+
+    def restrictive_converter(file_like, sheet_name=0):
+        return b"x", 3, {}
+
+    monkeypatch.setattr(db, "pg_select_one", fake_pg_select_one)
+    monkeypatch.setattr(db, "pg_update", fake_pg_update)
+    monkeypatch.setattr(storage, "download_to_path", lambda key, path: None)
+    monkeypatch.setattr(storage, "upload_bytes", lambda key, data, content_type: None)
+    monkeypatch.setattr(_report_crud, "invalidate_local_parquet_cache", lambda report_id: None)
+
+    router = _make_router(converter=restrictive_converter)  # supports_mapping_override defaults False
+    route = _find_route(router, "POST", "/api/reports/{report_id}/reconvert")
+
+    result = await route.endpoint("r1", user={"id": "u1"})
+
+    assert result == {"ok": True, "rowCount": 3}
+
+
+@pytest.mark.asyncio
+async def test_reconvert_report_resets_status_to_ready_from_failed(monkeypatch):
+    # A previously-failed Report (status="failed", but original_xlsx_key
+    # was already uploaded before the failure) whose reconvert now
+    # succeeds must flip back to "ready" and get a parquet_key, or it stays
+    # invisible to the Dashboard forever despite having valid data (see
+    # routers/dashboard.py's _all_ready_*_parquet_paths, which filters on
+    # both status=ready AND a truthy parquet_key).
+    async def fake_pg_select_one(table, params=None):
+        return {
+            "id": "r1", "original_xlsx_key": "orig/r1.xlsx", "mapping": {},
+            "status": "failed", "error_message": "Lỗi cũ",
+        }
+
+    updates = []
+
+    async def fake_pg_update(table, params, data):
+        updates.append(data)
+
+    def fake_converter(path):
+        return b"x", 5, {"orderId": "Mã đơn hàng"}
+
+    monkeypatch.setattr(db, "pg_select_one", fake_pg_select_one)
+    monkeypatch.setattr(db, "pg_update", fake_pg_update)
+    monkeypatch.setattr(storage, "download_to_path", lambda key, path: None)
+    monkeypatch.setattr(storage, "upload_bytes", lambda key, data, content_type: None)
+    monkeypatch.setattr(_report_crud, "invalidate_local_parquet_cache", lambda report_id: None)
+
+    router = _make_router(converter=fake_converter)
+    route = _find_route(router, "POST", "/api/reports/{report_id}/reconvert")
+
+    result = await route.endpoint("r1", user={"id": "u1"})
+
+    assert result == {"ok": True, "rowCount": 5}
+    assert updates == [{"status": "ready", "row_count": 5, "mapping": {"orderId": "Mã đơn hàng"}, "parquet_key": "y"}]
+
+
+@pytest.mark.asyncio
+async def test_reconvert_report_converter_crash_becomes_400(monkeypatch):
+    # Mirrors _process_report's broad safety net (a bad/corrupt file must
+    # never crash the request) — before this, only mapping_error was
+    # caught, so any other converter exception propagated as an unhandled
+    # 500.
+    async def fake_pg_select_one(table, params=None):
+        return {"id": "r1", "original_xlsx_key": "orig/r1.xlsx", "mapping": {}}
+
+    def crashing_converter(path):
+        raise ValueError("dữ liệu hỏng")
+
+    monkeypatch.setattr(db, "pg_select_one", fake_pg_select_one)
+    monkeypatch.setattr(storage, "download_to_path", lambda key, path: None)
+
+    router = _make_router(converter=crashing_converter)
+    route = _find_route(router, "POST", "/api/reports/{report_id}/reconvert")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await route.endpoint("r1", user={"id": "u1"})
+
+    assert exc_info.value.status_code == 400
+    assert "dữ liệu hỏng" in exc_info.value.detail
 
 
 @pytest.mark.asyncio

@@ -568,11 +568,14 @@ def _prepare_orders_working(
     item_group, product_type, sku, sales_channel,
     combo_source, cashflow_source, master_source, channel_source,
     kenh_nho=None, aff_source=None, inhouse_handles=None,
-) -> tuple[str, list]:
+) -> tuple[str, list, set]:
     """Shared setup for every run_*_query function below: builds the WHERE
     clause for the requested filters and materializes orders_working on
     `con` for them to query. Factored out because all four functions need
-    the identical two steps in the identical order.
+    the identical two steps in the identical order. Also returns `available`
+    (which columns exist across parquet_source) so callers that need to
+    rebuild orders_working again on the same connection — see
+    run_summary_query's unscoped facets rebuild — don't have to re-probe it.
     """
     where_sql, params = _where_clause(
         from_date, to_date, category, status, warehouse_type, item_group, product_type, sku,
@@ -584,7 +587,7 @@ def _prepare_orders_working(
         aff_source, inhouse_handles, channel_source,
         from_date=from_date, to_date=to_date,
     )
-    return where_sql, params
+    return where_sql, params, available
 
 
 def run_summary_query(
@@ -599,7 +602,7 @@ def run_summary_query(
 
     con = _connect()
     try:
-        where_sql, params = _prepare_orders_working(
+        where_sql, params, available = _prepare_orders_working(
             con, parquet_source, from_date, to_date, category, status, warehouse_type,
             item_group, product_type, sku, sales_channel,
             combo_source, cashflow_source, master_source, channel_source,
@@ -675,14 +678,19 @@ def run_summary_query(
         # across all uploaded data, not just whatever falls inside the
         # currently-selected period. orders_working was already
         # materialized date-scoped above for the KPIs/timeline/top_n
-        # queries; rebuild it here (CREATE OR REPLACE, same connection)
-        # with from_date/to_date cleared just for this one query — every
-        # query above this point already ran against the scoped version.
-        available = _available_columns(con, parquet_source)
-        _build_orders_working(
-            con, parquet_source, available, combo_source, cashflow_source, master_source,
-            aff_source, inhouse_handles, channel_source, from_date=None, to_date=None,
-        )
+        # queries; when a date range was actually given, rebuild it here
+        # (CREATE OR REPLACE, same connection, reusing the `available` set
+        # _prepare_orders_working already probed) with from_date/to_date
+        # cleared just for this one query — every query above this point
+        # already ran against the scoped version. Skipped when no date
+        # range was requested in the first place, since orders_working is
+        # already the full unscoped set in that case (rebuilding would be
+        # byte-for-byte identical — pure waste).
+        if from_date or to_date:
+            _build_orders_working(
+                con, parquet_source, available, combo_source, cashflow_source, master_source,
+                aff_source, inhouse_handles, channel_source, from_date=None, to_date=None,
+            )
         facets_sql = """
             SELECT
               list(DISTINCT "category") AS categories,
@@ -790,7 +798,7 @@ def run_rows_query(
 
     con = _connect()
     try:
-        where_sql, params = _prepare_orders_working(
+        where_sql, params, _available = _prepare_orders_working(
             con, parquet_source, from_date, to_date, category, status, warehouse_type,
             item_group, product_type, sku, sales_channel,
             combo_source, cashflow_source, master_source, channel_source,
@@ -897,7 +905,7 @@ def run_grouped_rows_query(
 
     con = _connect()
     try:
-        where_sql, params = _prepare_orders_working(
+        where_sql, params, _available = _prepare_orders_working(
             con, parquet_source, from_date, to_date, category, status, warehouse_type,
             item_group, product_type, sku, sales_channel,
             combo_source, cashflow_source, master_source, channel_source,
@@ -948,7 +956,7 @@ def run_export_query(
 
     con = _connect()
     try:
-        where_sql, params = _prepare_orders_working(
+        where_sql, params, _available = _prepare_orders_working(
             con, parquet_source, from_date, to_date, category, status, warehouse_type,
             item_group, product_type, sku, sales_channel,
             combo_source, cashflow_source, master_source, channel_source,
