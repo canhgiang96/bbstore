@@ -47,6 +47,35 @@ def test_missing_order_id_column_raises():
         pass
 
 
+def test_header_row_preceded_by_decorative_banner_rows_is_still_detected():
+    # Real Shopee "Doanh thu" export, 2026-09-07 (file T8-6.9.xlsx): row 1
+    # is a decorative merged-cell category banner ("Thông tin đơn hàng" /
+    # "Chi tiết doanh thu"), row 2 is mostly blank, and the real column
+    # names (including "Mã đơn hàng") only start on row 3 — pd.read_excel's
+    # default header=0 previously picked up row 1's banner as the header,
+    # so "Mã đơn hàng" was never found even though the file has it.
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Thông tin đơn hàng", None, None, "Chi tiết doanh thu", None])
+    ws.append(["", None, None, "Doanh thu đơn hàng", None])
+    ws.append(["Mã giao dịch", "Mã đơn hàng", "Ghi chú", "Phí hoa hồng Tiếp thị liên kết", "Khác"])
+    ws.append(["T1", "O1", "", -5000, ""])
+    ws.append(["T2", "O2", "", -3200, ""])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    parquet_bytes, row_count, mapping = cashflow_excel_to_parquet(buf)
+
+    assert row_count == 2
+    assert mapping["orderId"] == "Mã đơn hàng"
+    assert mapping["phiAff"] == "Phí hoa hồng Tiếp thị liên kết"
+    df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
+    by_order = df.set_index("orderId")["phiAff"].to_dict()
+    assert by_order["O1"] == 5000
+    assert by_order["O2"] == 3200
+
+
 def test_missing_phi_aff_column_raises():
     headers = ["Mã giao dịch", "Mã đơn hàng"]
     rows = [["T1", "O1"]]

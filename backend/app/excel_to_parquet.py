@@ -36,7 +36,7 @@ def _is_nan(v) -> bool:
     return isinstance(v, float) and v != v  # NaN != NaN
 
 
-def read_excel_rows(file_like, sheet_name=0) -> tuple[list[dict], list[str]]:
+def read_excel_rows(file_like, sheet_name=0, header_row: int = 0) -> tuple[list[dict], list[str]]:
     # openpyxl's default mode builds a full in-memory Cell/style object graph
     # for every cell, which dominates upload time on large sheets;
     # read_only=True switches it to a lazy row iterator instead (values
@@ -50,9 +50,13 @@ def read_excel_rows(file_like, sheet_name=0) -> tuple[list[dict], list[str]]:
     # more than one column, so a <=1-column result is the signal to retry
     # without that shortcut (still much rarer than the fast path, so this
     # doesn't cost anything for the common well-formed case).
+    #
+    # header_row (0-indexed, default 0 i.e. the first row) lets a caller
+    # skip over decorative rows before the real column names — see
+    # cashflow_to_parquet._find_header_row for why Cashflow needs this.
     try:
         df = pd.read_excel(
-            file_like, sheet_name=sheet_name, keep_default_na=False, dtype=object,
+            file_like, sheet_name=sheet_name, header=header_row, keep_default_na=False, dtype=object,
             engine="openpyxl", engine_kwargs={"read_only": True, "data_only": True},
         )
         if df.shape[1] <= 1:
@@ -62,7 +66,7 @@ def read_excel_rows(file_like, sheet_name=0) -> tuple[list[dict], list[str]]:
             file_like.seek(0)
         try:
             df = pd.read_excel(
-                file_like, sheet_name=sheet_name, keep_default_na=False, dtype=object,
+                file_like, sheet_name=sheet_name, header=header_row, keep_default_na=False, dtype=object,
                 engine="openpyxl", engine_kwargs={"read_only": False, "data_only": True},
             )
         except Exception:
@@ -71,7 +75,7 @@ def read_excel_rows(file_like, sheet_name=0) -> tuple[list[dict], list[str]]:
             # failing the upload.
             if hasattr(file_like, "seek"):
                 file_like.seek(0)
-            df = pd.read_excel(file_like, sheet_name=sheet_name, keep_default_na=False, dtype=object)
+            df = pd.read_excel(file_like, sheet_name=sheet_name, header=header_row, keep_default_na=False, dtype=object)
     headers = [str(c).strip() for c in df.columns]
     df.columns = headers
     rows = df.to_dict(orient="records")

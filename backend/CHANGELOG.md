@@ -499,6 +499,23 @@ hơn:**
     nhẹ chỉ lấy danh sách giá trị riêng thay vì build lại toàn bộ
     `orders_working`.
 
+## 24. File Dòng tiền Shopee mẫu mới: báo lỗi "Không tìm thấy cột Mã đơn hàng" dù file có cột đó
+
+- **User báo lỗi 2026-09-07**, kèm file thật `T8-6.9.xlsx`: upload file
+  Dòng tiền Shopee bị lỗi "Không tìm thấy cột Mã đơn hàng trong file."
+  dù cột đó CÓ tồn tại. Nguyên nhân: Shopee đổi mẫu xuất file "Doanh thu"
+  — thêm 2 dòng banner trang trí phía trên (dòng 1 gộp ô ghi nhóm "Thông
+  tin đơn hàng"/"Chi tiết doanh thu", dòng 2 gần như trống) trước khi tới
+  dòng tiêu đề cột thật (dòng 3) — code cũ luôn coi dòng 1 là tiêu đề nên
+  đọc nhầm cả dòng 2 lẫn dòng 3 (chứa "Mã đơn hàng" thật) thành dữ liệu.
+  - `app/excel_to_parquet.py` (`read_excel_rows`): thêm tham số
+    `header_row` (mặc định 0, hành vi cũ không đổi cho 5 loại Report còn
+    lại) để cho phép đọc file với dòng tiêu đề không phải dòng 1.
+  - `app/cashflow_to_parquet.py`: khi không tìm thấy "Mã đơn hàng" ở dòng
+    1 như thường lệ, quét thử 10 dòng đầu tìm dòng nào có ô khớp chính
+    xác "Mã đơn hàng" rồi đọc lại file với dòng đó làm tiêu đề. Đã verify
+    bằng file thật: 11.274 dòng convert đúng.
+
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 
 - **Đa kênh khác (Lazada,...)**: áp dụng cách làm tương tự mục 10/11 khi có

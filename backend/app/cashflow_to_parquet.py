@@ -27,11 +27,12 @@ from __future__ import annotations
 
 import io
 
+import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .excel_to_parquet import read_excel_rows
-from .mapping import score_headers
+from .mapping import normalize_header, score_headers
 from .parsing import to_number
 
 CASHFLOW_KEYWORDS = {
@@ -68,6 +69,31 @@ class CashflowMappingError(ValueError):
     """Raised when the uploaded file is missing the order id or every Phí AFF/Phí sàn source column."""
 
 
+_MAX_HEADER_SCAN_ROWS = 10
+
+
+def _find_header_row(file_like, sheet_name) -> int | None:
+    """Scans the first _MAX_HEADER_SCAN_ROWS rows for one containing an
+    exact normalized match for "Mã đơn hàng" — used when row 1 isn't the
+    real header. Seen on a real Shopee "Doanh thu" export 2026-09-07: row 1
+    is a decorative merged-cell category banner ("Thông tin đơn hàng" /
+    "Chi tiết doanh thu"), row 2 is mostly blank, and the actual column
+    names (including "Mã đơn hàng") only start on row 3.
+    """
+    if hasattr(file_like, "seek"):
+        file_like.seek(0)
+    preview = pd.read_excel(
+        file_like, sheet_name=sheet_name, header=None, nrows=_MAX_HEADER_SCAN_ROWS,
+        keep_default_na=False, dtype=object, engine="openpyxl",
+    )
+    order_id_words = set(CASHFLOW_KEYWORDS["orderId"])
+    for i, row in preview.iterrows():
+        normalized = {normalize_header(v) for v in row}
+        if normalized & order_id_words:
+            return i
+    return None
+
+
 def detect_cashflow_mapping(headers: list[str]) -> dict[str, str]:
     # score_headers (not the simpler first_match_mapping used by
     # Combo/Master File) because "Hoa hồng liên kết" is a substring of
@@ -90,6 +116,17 @@ def cashflow_excel_to_parquet(file_like, sheet_name=0) -> tuple[bytes, int, dict
     """
     raw_rows, headers = read_excel_rows(file_like, sheet_name=sheet_name)
     mapping = detect_cashflow_mapping(headers)
+
+    if "orderId" not in mapping:
+        # Retry assuming a decorative row (or two) precedes the real header
+        # — see _find_header_row's docstring for the real export this was
+        # seen on.
+        header_row = _find_header_row(file_like, sheet_name)
+        if header_row is not None:
+            if hasattr(file_like, "seek"):
+                file_like.seek(0)
+            raw_rows, headers = read_excel_rows(file_like, sheet_name=sheet_name, header_row=header_row)
+            mapping = detect_cashflow_mapping(headers)
 
     if "orderId" not in mapping:
         raise CashflowMappingError("Không tìm thấy cột Mã đơn hàng trong file.")
