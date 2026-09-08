@@ -516,6 +516,33 @@ hơn:**
     xác "Mã đơn hàng" rồi đọc lại file với dòng đó làm tiêu đề. Đã verify
     bằng file thật: 11.274 dòng convert đúng.
 
+## 25. Thẻ KPI "Thuế" mới (Thuế GTGT + Thuế TNCN, chỉ thông tin)
+
+- **User yêu cầu 2026-09-08**: "Thuế của kênh Shopee = Thuế GTGT + Thuế
+  TNCN (lấy giá trị dương) trên file dòng tiền Shopee". Đã hỏi lại và
+  user xác nhận: KHÔNG trừ vào Doanh thu thuần/NMV/Lợi nhuận gộp (khác
+  với Phí sàn/Piship/Phí AFF) — chỉ thêm 1 thẻ KPI để xem số liệu.
+  - Thêm keyword ngắn "thue gtgt"/"thue tncn" bên cạnh 2 keyword TikTok
+    đầy đủ đã có ("... do TikTok Shop khấu trừ") cho cùng 2 field
+    `vatWithheld`/`pitWithheld` trong `app/cashflow_to_parquet.py` — nhờ
+    cơ chế so khớp ưu tiên khớp chính xác (score_headers) nên không bị
+    nhầm giữa file Shopee (tiêu đề ngắn) và file TikTok (tiêu đề dài) dù
+    dùng chung field.
+  - Field mới `thue` tính = -(Thuế GTGT + Thuế TNCN), độc lập hoàn toàn
+    với `platformFee`/`phiAff` — áp dụng bất kể kênh nào có 2 cột này
+    (không riêng Shopee), tính trước khi rẽ nhánh has_direct_aff.
+  - `app/query_engine.py`: `_cashflow_agg_join` join thêm `thue` (có kiểm
+    tra cột tồn tại, backward-compat với Report cũ chưa có), cộng vào
+    `orders_working` theo đúng tỷ lệ `orderPaidRatio`/combo giống
+    `phiAff`, KHÔNG đưa vào `nmv_row_expr`/`loi_nhuan_gop_row_expr`. Thêm
+    KPI `thue` ở `run_summary_query` và cột `thue` ở
+    `run_grouped_rows_query`/Detail table/Xuất Excel.
+  - Frontend: thẻ KPI "Thuế" mới (nhóm cùng NMV/Giá vốn ở Tổng quan, ghi
+    chú rõ "chỉ để tham khảo, không trừ vào NMV"), cột "Thuế" mới ở bảng
+    Dữ liệu chi tiết (cả 2 chế độ phẳng và group).
+  - Đã verify bằng file thật `T8-6.9.xlsx`: tổng Thuế = 67.727.902,
+    NMV/Lợi nhuận gộp không đổi khi có/không có cashflow_source.
+
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 
 - **Đa kênh khác (Lazada,...)**: áp dụng cách làm tương tự mục 10/11 khi có
@@ -525,7 +552,7 @@ hơn:**
 
 Mỗi lần sửa `frontend/js/app.js` hoặc `frontend/index.html`, nhớ tăng số
 `?v=N` ở 2 dòng `<script src="js/...">` cuối `index.html` — nếu không trình
-duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=41**.
+duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=42**.
 
 ## 9. Tối ưu hóa code (reuse/simplification/efficiency)
 

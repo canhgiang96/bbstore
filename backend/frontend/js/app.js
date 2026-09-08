@@ -1194,6 +1194,7 @@
     { label: "Phí AFF", valueId: "kpiPhiAff", pctId: "kpiPhiAffPct", value: k => k.phiAff, base: k => k.doanhThuThuan, note: "Phí hoa hồng Tiếp thị liên kết", ordersId: "kpiPhiAffOrders", orders: k => k.phiAffOrders },
     { label: "NMV", valueId: "kpiNmv", pctId: "kpiNmvPct", value: k => k.nmv, base: k => k.doanhThuThuan, note: "Doanh thu thuần − Phí sàn − Phí Piship − Phí AFF", ordersId: "kpiNmvOrders", orders: k => k.nmvOrders },
     { label: "Giá vốn", valueId: "kpiGiaVon", pctId: "kpiGiaVonPct", value: k => k.giaVon, base: k => k.doanhThuThuan, note: "Số lượng thực x Giá vốn (Master File)" },
+    { label: "Thuế", valueId: "kpiThue", pctId: "kpiThuePct", value: k => k.thue, base: k => k.doanhThuThuan, note: "Thuế GTGT + Thuế TNCN (Shopee) — chỉ để tham khảo, không trừ vào NMV" },
     { label: "Lợi nhuận gộp", valueId: "kpiLoiNhuanGop", pctId: "kpiLoiNhuanGopPct", value: k => k.loiNhuanGop, base: k => k.doanhThuThuan, note: "NMV − Giá vốn" },
   ];
 
@@ -1232,6 +1233,7 @@
     { key: "platformFee", label: "Phí sàn", fmt: v => fmtNumber(v) },
     { key: "piship", label: "Phí Piship", fmt: v => fmtNumber(v) },
     { key: "phiAff", label: "Phí AFF", fmt: v => fmtNumber(v) },
+    { key: "thue", label: "Thuế", fmt: v => fmtNumber(v) },
     { key: "nmv", label: "NMV", fmt: v => fmtNumber(v) },
     { key: "phanLoaiKho", label: "Phân loại kho" },
     { key: "phanLoaiMuc", label: "Phân loại mục" },
@@ -1274,6 +1276,7 @@
     { key: "platformFee", label: "Phí sàn", fmt: v => fmtNumber(v) },
     { key: "piship", label: "Phí Piship", fmt: v => fmtNumber(v) },
     { key: "phiAff", label: "Phí AFF", fmt: v => fmtNumber(v) },
+    { key: "thue", label: "Thuế", fmt: v => fmtNumber(v) },
     { key: "nmv", label: "NMV", fmt: v => fmtNumber(v) },
     { key: "giaVon", label: "Giá vốn", fmt: v => fmtNumber(v) },
     { key: "loiNhuanGop", label: "Lợi nhuận gộp", fmt: v => fmtNumber(v) },

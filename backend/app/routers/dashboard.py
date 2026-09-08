@@ -32,7 +32,7 @@ DETAIL_COLUMN_LABELS = {
     "quantity": "Số lượng", "returnedQty": "SL hoàn trả", "soLuongThuc": "SL thực",
     "price": "Giá bán", "originalPrice": "Giá gốc", "revenue": "Doanh thu", "doanhSo": "Doanh số",
     "status": "Status", "trangThai": "Trạng thái", "discount": "Giảm giá", "voucher": "Voucher",
-    "platformFee": "Phí sàn", "piship": "Phí Piship", "phiAff": "Phí AFF",
+    "platformFee": "Phí sàn", "piship": "Phí Piship", "phiAff": "Phí AFF", "thue": "Thuế",
     "phanLoaiKho": "Phân loại kho", "phanLoaiMuc": "Phân loại mục", "phanLoaiSp": "Phân loại sản phẩm",
     "giaVon": "Giá vốn", "gmv": "GMV", "doanhThuThuan": "Doanh thu thuần", "nmv": "NMV",
     "loiNhuanGop": "Lợi nhuận gộp", "salesChannel": "Kênh bán hàng", "kenhNho": "Kênh nhỏ",
@@ -46,7 +46,7 @@ GROUP_BY_LABELS = {
 GROUP_AGG_LABELS = {
     "rowCount": "Số dòng", "quantity": "Số lượng", "returnedQty": "SL hoàn trả",
     "soLuongThuc": "SL thực", "doanhSo": "Doanh số", "discount": "Giảm giá", "voucher": "Voucher",
-    "platformFee": "Phí sàn", "piship": "Phí Piship", "phiAff": "Phí AFF", "giaVon": "Giá vốn",
+    "platformFee": "Phí sàn", "piship": "Phí Piship", "phiAff": "Phí AFF", "thue": "Thuế", "giaVon": "Giá vốn",
     "gmv": "GMV", "doanhThuThuan": "Doanh thu thuần", "nmv": "NMV", "loiNhuanGop": "Lợi nhuận gộp",
 }
 

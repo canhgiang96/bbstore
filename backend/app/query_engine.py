@@ -22,7 +22,7 @@ DETAIL_COLUMNS = [
     "date", "orderId", "sku", "skuVariant", "product", "category", "customer",
     "quantity", "returnedQty", "soLuongThuc", "price", "originalPrice",
     "revenue", "doanhSo", "status", "trangThai", "discount", "voucher",
-    "platformFee", "piship", "phiAff", "phanLoaiKho", "phanLoaiMuc",
+    "platformFee", "piship", "phiAff", "thue", "phanLoaiKho", "phanLoaiMuc",
     "phanLoaiSp", "giaVon", "gmv", "doanhThuThuan", "nmv", "loiNhuanGop",
     "salesChannel", "kenhNho",
 ]
@@ -51,7 +51,7 @@ GROUP_SORT_COLUMNS = {
     "groupValue": "group_value", "rowCount": "row_count", "quantity": "quantity",
     "returnedQty": "returned_qty", "soLuongThuc": "so_luong_thuc", "doanhSo": "doanh_so",
     "discount": "discount", "voucher": "voucher", "platformFee": "platform_fee",
-    "piship": "piship", "phiAff": "phi_aff", "giaVon": "gia_von",
+    "piship": "piship", "phiAff": "phi_aff", "thue": "thue", "giaVon": "gia_von",
     "gmv": "gmv", "doanhThuThuan": "doanh_thu_thuan", "nmv": "nmv", "loiNhuanGop": "loi_nhuan_gop",
 }
 
@@ -60,7 +60,7 @@ GMV_STATUSES_SQL = "('Hoàn thành', 'Đang giao', 'Hoàn 1 phần')"
 EMPTY_SUMMARY = {
     "kpis": {
         "doanhSo": 0, "gmv": 0, "huyChuaXK": 0, "huySauXK": 0, "hoan": 0,
-        "discount": 0, "voucher": 0, "platformFee": 0, "piship": 0, "phiAff": 0,
+        "discount": 0, "voucher": 0, "platformFee": 0, "piship": 0, "phiAff": 0, "thue": 0,
         "doanhThuThuan": 0, "nmv": 0, "giaVon": 0, "loiNhuanGop": 0, "rowCount": 0,
         "doanhSoOrders": 0, "huyChuaXKOrders": 0, "huySauXKOrders": 0, "hoanOrders": 0,
         "gmvOrders": 0, "doanhThuThuanOrders": 0, "nmvOrders": 0, "pishipOrders": 0, "phiAffOrders": 0,
@@ -226,17 +226,20 @@ def _combo_join(combo_source) -> tuple[str, list, str, str, str]:
     return join_sql, [combo_source], sku_variant_expr, "COALESCE(cm.ratio, 1)", "cm.slot"
 
 
-def _cashflow_agg_join(con, available: set, cashflow_source) -> tuple[str, list, str, str]:
-    """Returns (join_sql, join_params, aff_expr, platform_fee_expr) to LEFT
-    JOIN per-order Phí AFF (and, for TikTok Cashflow Reports, Phí sàn) from
-    ready Cashflow Reports into an Orders query whose FROM clause is
-    aliased "o". Both expressions are always safe to use unconditionally —
-    each is a literal "0" when there's no cashflow data yet, when this
-    Orders Report predates the "orderPaidRatio" column (same backward-compat
+def _cashflow_agg_join(con, available: set, cashflow_source) -> tuple[str, list, str, str, str]:
+    """Returns (join_sql, join_params, aff_expr, platform_fee_expr,
+    thue_expr) to LEFT JOIN per-order Phí AFF (and, for TikTok Cashflow
+    Reports, Phí sàn; and Thuế GTGT+TNCN when the file has them) from ready
+    Cashflow Reports into an Orders query whose FROM clause is aliased "o".
+    All three expressions are always safe to use unconditionally — each is
+    a literal "0" when there's no cashflow data yet, when this Orders
+    Report predates the "orderPaidRatio" column (same backward-compat
     pattern as discount/voucher/platformFee/piship), or — for
-    platform_fee_expr — when no uploaded Cashflow Report has a "platformFee"
-    column yet (Shopee's own Cashflow Reports never do; that fee comes from
-    the Orders file itself instead — see excel_to_parquet.py).
+    platform_fee_expr/thue_expr — when no uploaded Cashflow Report has that
+    column yet (Shopee's own Cashflow Reports never have "platformFee";
+    that fee comes from the Orders file itself instead — see
+    excel_to_parquet.py. "thue" only exists on Cashflow Reports converted
+    since 2026-09-08).
 
     The GROUP BY in the subquery guards against the same Mã đơn hàng
     appearing in more than one uploaded Cashflow Report — summed once
@@ -244,19 +247,22 @@ def _cashflow_agg_join(con, available: set, cashflow_source) -> tuple[str, list,
     """
     order_ratio_col = 'COALESCE(o."orderPaidRatio", 0)' if "orderPaidRatio" in available else "0"
     if not cashflow_source:
-        return "", [], "0", "0"
+        return "", [], "0", "0", "0"
     cashflow_available = _available_columns(con, cashflow_source)
     has_platform_fee = "platformFee" in cashflow_available
+    has_thue = "thue" in cashflow_available
     platform_fee_select = ', SUM("platformFee") AS cf_platform_fee' if has_platform_fee else ""
+    thue_select = ', SUM("thue") AS cf_thue' if has_thue else ""
     join_sql = (
         'LEFT JOIN ('
-        f'SELECT "orderId" AS cf_order_id, SUM("phiAff") AS cf_phi_aff{platform_fee_select} '
+        f'SELECT "orderId" AS cf_order_id, SUM("phiAff") AS cf_phi_aff{platform_fee_select}{thue_select} '
         'FROM read_parquet(?, union_by_name=true) GROUP BY "orderId"'
         ') cf ON o."orderId" = cf.cf_order_id'
     )
     aff_expr = f'({order_ratio_col} * COALESCE(cf.cf_phi_aff, 0))'
     platform_fee_expr = f'({order_ratio_col} * COALESCE(cf.cf_platform_fee, 0))' if has_platform_fee else "0"
-    return join_sql, [cashflow_source], aff_expr, platform_fee_expr
+    thue_expr = f'({order_ratio_col} * COALESCE(cf.cf_thue, 0))' if has_thue else "0"
+    return join_sql, [cashflow_source], aff_expr, platform_fee_expr, thue_expr
 
 
 def _master_join(master_source, sku_variant_expr: str) -> tuple[str, list, str, str, str, str]:
@@ -430,7 +436,7 @@ def _build_orders_working(
     channel_override_col = '"channelOverride"' if "channelOverride" in available else "NULL"
 
     combo_join_sql, combo_params, sku_variant_expr, ratio_expr, slot_expr = _combo_join(combo_source)
-    cashflow_join_sql, cashflow_params, aff_expr, cashflow_platform_fee_expr = _cashflow_agg_join(
+    cashflow_join_sql, cashflow_params, aff_expr, cashflow_platform_fee_expr, cashflow_thue_expr = _cashflow_agg_join(
         con, available, cashflow_source
     )
     master_join_sql, master_params, muc_expr, phan_loai_sp_expr, phan_loai_kho_expr, gia_von_expr = _master_join(
@@ -493,6 +499,10 @@ def _build_orders_working(
         f"THEN {piship_col} ELSE 0 END"
     )
     phi_aff_row_expr = f"(({aff_expr}) * {ratio_expr})"
+    # Informational only — confirmed with the user 2026-09-08 to NOT feed
+    # into nmv_row_expr/loi_nhuan_gop_row_expr below, unlike platformFee/
+    # piship/phiAff.
+    thue_row_expr = f"(({cashflow_thue_expr}) * {ratio_expr})"
     gmv_row_expr = (
         f'CASE WHEN o."trangThai" IN {GMV_STATUSES_SQL} '
         f'THEN o."originalPrice" * {ratio_expr} * o."soLuongThuc" ELSE 0 END'
@@ -537,6 +547,7 @@ def _build_orders_working(
           {combined_platform_fee_col} * {ratio_expr} AS "platformFee",
           CASE WHEN ({slot_expr} IS NULL OR {slot_expr} = 1) AND o."trangThai" != 'Hủy chưa XK' THEN {piship_col} ELSE 0 END AS "piship",
           ({aff_expr}) * {ratio_expr} AS "phiAff",
+          {thue_row_expr} AS "thue",
           {warehouse_expr} AS "phanLoaiKho",
           {item_group_expr} AS "phanLoaiMuc",
           {product_type_expr} AS "phanLoaiSp",
@@ -628,6 +639,7 @@ def run_summary_query(
               COALESCE(SUM("platformFee"), 0) AS platform_fee,
               COALESCE(SUM("piship"), 0) AS piship,
               COALESCE(SUM("phiAff"), 0) AS phi_aff,
+              COALESCE(SUM("thue"), 0) AS thue,
               COALESCE(SUM(CASE WHEN "trangThai" IN {GMV_STATUSES_SQL} THEN "giaVon" ELSE 0 END), 0) AS gia_von,
               COUNT(*) AS row_count,
               COUNT(DISTINCT "orderId") AS doanh_so_orders,
@@ -644,7 +656,7 @@ def run_summary_query(
         """
         (
             total, gmv, huy_chua_xk, huy_sau_xk, hoan, discount, voucher,
-            platform_fee, piship, phi_aff, gia_von, row_count,
+            platform_fee, piship, phi_aff, thue, gia_von, row_count,
             doanh_so_orders, gmv_orders, huy_chua_xk_orders, huy_sau_xk_orders, hoan_orders,
             nmv_orders, piship_orders, phi_aff_orders,
         ) = con.execute(totals_sql, params).fetchone()
@@ -718,6 +730,7 @@ def run_summary_query(
                 "platformFee": platform_fee,
                 "piship": piship,
                 "phiAff": phi_aff,
+                "thue": thue,
                 "doanhThuThuan": doanh_thu_thuan,
                 "nmv": nmv,
                 "giaVon": gia_von,
@@ -854,6 +867,7 @@ def _grouped_agg_sql(where_sql: str, group_col: str) -> str:
           COALESCE(SUM("platformFee"), 0) AS platform_fee,
           COALESCE(SUM("piship"), 0) AS piship,
           COALESCE(SUM("phiAff"), 0) AS phi_aff,
+          COALESCE(SUM("thue"), 0) AS thue,
           COALESCE(SUM("giaVon"), 0) AS gia_von,
           COALESCE(SUM("gmv"), 0) AS gmv,
           COALESCE(SUM("doanhThuThuan"), 0) AS doanh_thu_thuan,
@@ -871,7 +885,7 @@ def _grouped_row_dict(r: dict) -> dict:
         "soLuongThuc": r["so_luong_thuc"], "doanhSo": r["doanh_so"],
         "discount": r["discount"], "voucher": r["voucher"],
         "platformFee": r["platform_fee"], "piship": r["piship"],
-        "phiAff": r["phi_aff"], "giaVon": r["gia_von"],
+        "phiAff": r["phi_aff"], "thue": r["thue"], "giaVon": r["gia_von"],
         "gmv": r["gmv"], "doanhThuThuan": r["doanh_thu_thuan"],
         "nmv": r["nmv"], "loiNhuanGop": r["loi_nhuan_gop"],
     }

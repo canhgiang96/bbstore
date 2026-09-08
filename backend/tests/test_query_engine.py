@@ -605,6 +605,43 @@ def test_cashflow_platform_fee_prorated_and_added_to_orders_file_platform_fee(
         os.remove(cashflow_path)
 
 
+def test_cashflow_thue_prorated_but_excluded_from_nmv_and_loi_nhuan_gop(
+    parquet_path_with_discounts,
+):
+    # "Thuế" (Thuế GTGT + Thuế TNCN, from cashflow_to_parquet.py) is
+    # informational only — confirmed with the user 2026-09-08 to NOT
+    # reduce NMV/Lợi nhuận gộp the way platformFee/piship/phiAff do, even
+    # though it's prorated across a multi-line order the same way.
+    cashflow_path = _write_cashflow_parquet([{"orderId": "D1", "phiAff": 0.0, "thue": 5000.0}])
+    try:
+        without_thue = run_summary_query(parquet_path_with_discounts)
+        with_thue = run_summary_query(parquet_path_with_discounts, cashflow_source=[cashflow_path])
+
+        assert with_thue["kpis"]["thue"] == 5000
+        assert with_thue["kpis"]["nmv"] == without_thue["kpis"]["nmv"]
+        assert with_thue["kpis"]["loiNhuanGop"] == without_thue["kpis"]["loiNhuanGop"]
+
+        rows = run_rows_query(parquet_path_with_discounts, page_size=10, cashflow_source=[cashflow_path])
+        by_sku = {r["skuVariant"]: r for r in rows["rows"]}
+        # 5000 split 0.4/0.6 across the order's two lines -> sums back to 5000.
+        assert by_sku["A100-1"]["thue"] == 5000 * 0.4
+        assert by_sku["B200-1"]["thue"] == 5000 * 0.6
+    finally:
+        os.remove(cashflow_path)
+
+
+def test_cashflow_thue_is_zero_when_no_cashflow_report_has_it(parquet_path_with_discounts):
+    # A Cashflow Report converted before the "thue" column existed (or a
+    # file with neither Thuế GTGT nor Thuế TNCN) must not error — thue
+    # stays 0.
+    cashflow_path = _write_cashflow_parquet([{"orderId": "D1", "phiAff": 2000.0}])
+    try:
+        result = run_summary_query(parquet_path_with_discounts, cashflow_source=[cashflow_path])
+        assert result["kpis"]["thue"] == 0
+    finally:
+        os.remove(cashflow_path)
+
+
 def test_cashflow_multiple_rows_for_same_order_are_summed(parquet_path_with_discounts):
     # A single order can appear on more than one row within the SAME
     # Cashflow Report file (TikTok's "income" export does this for a

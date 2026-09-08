@@ -15,9 +15,18 @@ a real TikTok income export, 2026-08-26/27):
 Both channels store these as negative amounts; the Dashboard wants them
 positive, same as Shopee's phiAff always has.
 
+Also supplies "Thuế" (informational only, confirmed with the user
+2026-09-08 to NOT be subtracted anywhere — it does not reduce NMV/Lợi
+nhuận gộp like Phí sàn/Piship/Phí AFF do):
+    Thuế = Thuế GTGT + Thuế TNCN
+computed whenever the file has those columns, regardless of channel —
+Shopee's plain-named columns and TikTok's "... do TikTok Shop khấu trừ"
+columns both resolve to the same vatWithheld/pitWithheld mapping keys.
+
 For a fully-refunded TikTok order (its rows' "Tổng doanh thu" nets to 0),
 the affiliate-commission columns are treated as 0 in both formulas above —
-see _REVENUE_EPSILON's comment for why.
+see _REVENUE_EPSILON's comment for why. Thuế/vatWithheld/pitWithheld are
+NOT zeroed by that same rule — the user only confirmed it for Phí AFF.
 
 This is intentionally a small, separate module rather than reusing
 app.mapping's FIELDS/detect_mapping() — that machinery is Orders-specific
@@ -42,8 +51,14 @@ CASHFLOW_KEYWORDS = {
     "affiliateCommission": ["hoa hong lien ket"],
     "affiliateAdsCommission": ["hoa hong lien ket quang cao cua hang"],
     "totalFee": ["tong phi"],
-    "vatWithheld": ["thue gtgt do tiktok shop khau tru"],
-    "pitWithheld": ["thue tncn do tiktok shop khau tru"],
+    # The longer TikTok-only phrase is listed first but both variants map to
+    # the same field — score_headers' exact-match-priority scoring picks
+    # whichever one is actually an exact normalized match for a given file's
+    # header (Shopee's plain "Thuế GTGT"/"Thuế TNCN" vs TikTok's "... do
+    # TikTok Shop khấu trừ"), so there's no risk of the short Shopee keyword
+    # accidentally winning over the longer TikTok header or vice versa.
+    "vatWithheld": ["thue gtgt do tiktok shop khau tru", "thue gtgt"],
+    "pitWithheld": ["thue tncn do tiktok shop khau tru", "thue tncn"],
     "totalRevenue": ["tong doanh thu"],
 }
 
@@ -107,12 +122,13 @@ def detect_cashflow_mapping(headers: list[str]) -> dict[str, str]:
 def cashflow_excel_to_parquet(file_like, sheet_name=0) -> tuple[bytes, int, dict]:
     """Returns (parquet_bytes, row_count, resolved_mapping).
 
-    Each output row is {"orderId": ..., "phiAff": ..., "platformFee": ...}
-    — "platformFee" is 0 for a Shopee-style file (its Phí sàn already comes
-    from the Orders file) and only nonzero when the TikTok-style component
-    columns were detected instead of Shopee's single combined column. One
-    row per source row — the user confirmed each Mã đơn hàng appears
-    exactly once per file.
+    Each output row is {"orderId": ..., "phiAff": ..., "platformFee": ...,
+    "thue": ...} — "platformFee" is 0 for a Shopee-style file (its Phí sàn
+    already comes from the Orders file) and only nonzero when the
+    TikTok-style component columns were detected instead of Shopee's single
+    combined column. "thue" is 0 whenever the file has neither a vatWithheld
+    nor pitWithheld column. One row per source row — the user confirmed
+    each Mã đơn hàng appears exactly once per file.
     """
     raw_rows, headers = read_excel_rows(file_like, sheet_name=sheet_name)
     mapping = detect_cashflow_mapping(headers)
@@ -138,6 +154,8 @@ def cashflow_excel_to_parquet(file_like, sheet_name=0) -> tuple[bytes, int, dict
     order_col = mapping["orderId"]
     type_col = mapping.get("transactionType")
     revenue_col = mapping.get("totalRevenue")
+    vat_col = mapping.get("vatWithheld")
+    pit_col = mapping.get("pitWithheld")
 
     included_rows = []
     order_revenue_totals: dict[str, float] = {}
@@ -153,6 +171,8 @@ def cashflow_excel_to_parquet(file_like, sheet_name=0) -> tuple[bytes, int, dict
 
     rows = []
     for order_id, row in included_rows:
+        vat = to_number(row.get(vat_col)) if vat_col else 0.0
+        pit = to_number(row.get(pit_col)) if pit_col else 0.0
         if has_direct_aff:
             phi_aff = -to_number(row.get(mapping["phiAff"]))
             platform_fee = 0.0
@@ -164,12 +184,11 @@ def cashflow_excel_to_parquet(file_like, sheet_name=0) -> tuple[bytes, int, dict
                 aff1 = to_number(row.get(mapping["affiliateCommission"])) if "affiliateCommission" in mapping else 0.0
                 aff2 = to_number(row.get(mapping["affiliateAdsCommission"])) if "affiliateAdsCommission" in mapping else 0.0
             total_fee = to_number(row.get(mapping["totalFee"])) if "totalFee" in mapping else 0.0
-            vat = to_number(row.get(mapping["vatWithheld"])) if "vatWithheld" in mapping else 0.0
-            pit = to_number(row.get(mapping["pitWithheld"])) if "pitWithheld" in mapping else 0.0
             phi_aff = -(aff1 + aff2)
             platform_fee = -(total_fee - aff1 - aff2 - vat - pit)
+        thue = -(vat + pit)
 
-        rows.append({"orderId": order_id, "phiAff": phi_aff, "platformFee": platform_fee})
+        rows.append({"orderId": order_id, "phiAff": phi_aff, "platformFee": platform_fee, "thue": thue})
 
     if not rows:
         raise CashflowMappingError("Không có dòng dữ liệu hợp lệ nào (không đọc được Mã đơn hàng ở bất kỳ dòng nào).")

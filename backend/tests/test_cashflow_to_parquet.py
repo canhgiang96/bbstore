@@ -104,6 +104,35 @@ def test_shopee_style_file_has_zero_platform_fee():
     assert (df["platformFee"] == 0).all()
 
 
+SHOPEE_TAX_HEADERS = ["Mã giao dịch", "Mã đơn hàng", "Phí hoa hồng Tiếp thị liên kết", "Thuế GTGT", "Thuế TNCN"]
+
+SHOPEE_TAX_ROWS = [
+    ["T1", "O1", 0, -3218, -1609],
+    ["T2", "O2", -30139, -5814, -2907],
+]
+
+
+def test_shopee_style_file_computes_thue_from_plain_vat_pit_headers():
+    # Real Shopee "Doanh thu" export, 2026-09-07/08: plain "Thuế GTGT"/
+    # "Thuế TNCN" headers (no "do TikTok Shop khấu trừ" suffix) must still
+    # resolve to vatWithheld/pitWithheld via the shorter keyword variants —
+    # user confirmed 2026-09-08: Thuế = Thuế GTGT + Thuế TNCN (dương).
+    parquet_bytes, row_count, mapping = cashflow_excel_to_parquet(make_xlsx_bytes(SHOPEE_TAX_HEADERS, SHOPEE_TAX_ROWS))
+    assert row_count == 2
+    assert mapping["vatWithheld"] == "Thuế GTGT"
+    assert mapping["pitWithheld"] == "Thuế TNCN"
+
+    df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
+    by_order = df.set_index("orderId")
+    assert by_order.loc["O1", "thue"] == 3218 + 1609
+    assert by_order.loc["O2", "thue"] == 5814 + 2907
+    # phiAff/platformFee stay computed exactly as before — thue is purely
+    # additive, doesn't change either.
+    assert by_order.loc["O1", "phiAff"] == 0
+    assert by_order.loc["O2", "phiAff"] == 30139
+    assert (df["platformFee"] == 0).all()
+
+
 # TikTok's "income" export headers/values (confirmed with the user against
 # a real file, 2026-08-26/27) — Phí AFF = Hoa hồng liên kết + Hoa hồng
 # liên kết Quảng cáo cửa hàng; Phí sàn = Tổng phí minus those two minus
@@ -148,6 +177,11 @@ def test_tiktok_style_file_computes_phi_aff_and_platform_fee():
     assert t2["platformFee"] == 78660 - 17860 - 3637 - 3247 - 1624
 
     assert "T3" not in by_order.index
+
+    # thue is independent of, and additive to, platformFee/phiAff above —
+    # both T1 and T2 share the same withheld-tax columns in this fixture.
+    assert t1["thue"] == 3247 + 1624
+    assert t2["thue"] == 3247 + 1624
 
 
 TIKTOK_REVENUE_HEADERS = TIKTOK_HEADERS + ["Tổng doanh thu"]
