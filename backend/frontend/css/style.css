@@ -305,6 +305,9 @@ tbody tr:hover { background: var(--primary-soft); }
 .multi-select-list label { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; white-space: nowrap; }
 .multi-select-list .muted { padding: 4px 0; }
 #colPicker .multi-select-list { left: auto; right: 0; }
+.col-picker-row { cursor: default; }
+.col-drag-handle { cursor: grab; color: var(--text-muted); font-size: 14px; line-height: 1; }
+.col-picker-row:active .col-drag-handle { cursor: grabbing; }
 
 /* Filter-bar multi-selects (Trạng thái/Phân loại kho/mục/sản phẩm) look
    like the <select>/<input> they replaced, not a button. */

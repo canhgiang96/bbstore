@@ -576,6 +576,21 @@ hơn:**
     tự tạo cho cùng 1 đơn: công thức Số tiền đã thu/Còn lại tính đúng,
     NMV/Lợi nhuận gộp không đổi.
 
+## 27. Kéo-thả sắp xếp thứ tự cột ở popover "Cột hiển thị" (tab Dữ liệu chi tiết)
+
+- **User yêu cầu 2026-09-09**: muốn tự sắp xếp thứ tự hiển thị các cột ở
+  tab Dữ liệu chi tiết — trước đây popover "Cột hiển thị" chỉ cho ẩn/hiện
+  cột (checkbox), thứ tự cột luôn cố định theo thứ tự khai báo trong code.
+  - `frontend/js/app.js`: thêm `dash.colOrder` (mảng key TABLE_COLS theo
+    thứ tự người dùng chọn, lưu localStorage `bbstore_detail_col_order`,
+    độc lập với tập ẩn/hiện `visibleCols`). Mỗi dòng trong popover giờ có
+    thể kéo-thả (`draggable`, HTML5 drag-and-drop thuần, không dùng thư
+    viện ngoài) để đổi vị trí; thứ tự này áp dụng cho cả bảng phẳng, bảng
+    group (kể cả các mức lồng nhau khi mở rộng nhóm), và file Xuất Excel.
+  - Cột mới thêm sau này (vd "Thuế", "Còn lại"...) mà chưa có trong thứ tự
+    đã lưu của người dùng sẽ tự động xếp ở cuối, không bị mất khỏi bảng.
+  - `frontend/css/style.css`: thêm style tay cầm kéo (`.col-drag-handle`).
+
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 
 - **Đa kênh khác (Lazada,...)**: áp dụng cách làm tương tự mục 10/11 khi có
@@ -585,7 +600,7 @@ hơn:**
 
 Mỗi lần sửa `frontend/js/app.js` hoặc `frontend/index.html`, nhớ tăng số
 `?v=N` ở 2 dòng `<script src="js/...">` cuối `index.html` — nếu không trình
-duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=43**.
+duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=44**.
 
 ## 9. Tối ưu hóa code (reuse/simplification/efficiency)
 

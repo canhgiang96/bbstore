@@ -654,6 +654,7 @@
     detailPage: 1,
     detailPageSize: 15,
     visibleCols: null, // Set, lazily loaded from localStorage — TABLE_COLS isn't defined yet at this point in the file
+    colOrder: null, // Array of TABLE_COLS keys in display order — same lazy-load rationale as visibleCols
     // Nested "Group theo" tree state — a node's path is the ordered chain of
     // {column, value} filters from the root down to (and including) it, e.g.
     // [{column:"category",value:"Áo"},{column:"warehouseType",value:"Kho HN"}].
@@ -864,6 +865,57 @@
     try { localStorage.setItem(VISIBLE_COLS_KEY, JSON.stringify([...dash.visibleCols])); } catch (e) { /* storage unavailable */ }
   }
 
+  const COL_ORDER_KEY = "bbstore_detail_col_order";
+
+  // dash.colOrder holds every TABLE_COLS key (not just the visible ones) in
+  // the user's preferred display order — the "Cột hiển thị" popover lets
+  // dragging a row reorder this list, independent from show/hide (visibleCols).
+  function ensureColOrder() {
+    if (dash.colOrder) return;
+    let order = null;
+    try {
+      const raw = localStorage.getItem(COL_ORDER_KEY);
+      if (raw) {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) order = arr.filter(k => TABLE_COLS.some(c => c.key === k));
+      }
+    } catch (e) { /* ignore corrupt localStorage value */ }
+    const allKeys = TABLE_COLS.map(c => c.key);
+    // Any key missing from a saved order (a column added after the user's
+    // last customization, or a corrupt/partial value) is appended at the
+    // end in its default TABLE_COLS position, so a new column doesn't
+    // silently disappear from the table.
+    const merged = order ? [...order, ...allKeys.filter(k => !order.includes(k))] : allKeys;
+    dash.colOrder = merged;
+  }
+
+  function saveColOrder() {
+    try { localStorage.setItem(COL_ORDER_KEY, JSON.stringify(dash.colOrder)); } catch (e) { /* storage unavailable */ }
+  }
+
+  // Returns cols (a TABLE_COLS/GROUP_AGG_COLS-shaped array) reordered per
+  // dash.colOrder and filtered to what should actually display —
+  // alwaysKeys bypasses the visibleCols check (e.g. "rowCount", which the
+  // grouped view always shows regardless of the picker). Falls back to
+  // cols' own original order for any key colOrder doesn't know about (e.g.
+  // GROUP_AGG_COLS-only quantity/returnedQty/soLuongThuc, which aren't in
+  // the TABLE_COLS-keyed colOrder at all).
+  function orderedCols(cols, alwaysKeys) {
+    const alwaysSet = new Set(alwaysKeys || []);
+    const isShown = c => alwaysSet.has(c.key) || dash.visibleCols.has(c.key);
+    const byKey = new Map(cols.map(c => [c.key, c]));
+    const result = [];
+    const seen = new Set();
+    dash.colOrder.forEach(key => {
+      const c = byKey.get(key);
+      if (c && isShown(c)) { result.push(c); seen.add(key); }
+    });
+    cols.forEach(c => {
+      if (!seen.has(c.key) && isShown(c)) result.push(c);
+    });
+    return result;
+  }
+
   // Generic multi-select checkbox popover — shared by the 4 filter-bar
   // pickers (Trạng thái/Phân loại kho/mục/sản phẩm). sortedValues must
   // already be in display order; entries no longer present in it (e.g. the
@@ -972,11 +1024,20 @@
     };
   }
 
+  // Renders every TABLE_COLS entry (checked or not) in dash.colOrder's
+  // sequence, each row draggable so the user can reorder columns — the
+  // resulting order also drives the actual table (see orderedCols).
   function renderColumnPicker() {
     const list = el("colPickerList");
-    list.innerHTML = TABLE_COLS.map(c =>
-      `<label><input type="checkbox" data-col="${escapeHtml(c.key)}" ${dash.visibleCols.has(c.key) ? "checked" : ""}/> ${escapeHtml(c.label)}</label>`
-    ).join("");
+    const byKey = new Map(TABLE_COLS.map(c => [c.key, c]));
+    list.innerHTML = dash.colOrder.map(key => {
+      const c = byKey.get(key);
+      if (!c) return "";
+      return `<label class="col-picker-row" draggable="true" data-col="${escapeHtml(c.key)}">
+        <span class="col-drag-handle" title="Kéo để sắp xếp">⠿</span>
+        <input type="checkbox" data-col="${escapeHtml(c.key)}" ${dash.visibleCols.has(c.key) ? "checked" : ""}/> ${escapeHtml(c.label)}
+      </label>`;
+    }).join("");
     list.querySelectorAll("input[data-col]").forEach(cb => {
       cb.onchange = () => {
         const key = cb.dataset.col;
@@ -986,6 +1047,33 @@
         saveVisibleCols();
         rerenderDetailTableOnly();
       };
+    });
+    wireColumnPickerDragAndDrop(list);
+  }
+
+  // Native HTML5 drag-and-drop (no library) — dragging a row over another
+  // reorders dash.colOrder to place the dragged column right before the
+  // one it's currently over, persists it, and re-renders both the picker
+  // (so the row list itself reflects the new order) and the table.
+  function wireColumnPickerDragAndDrop(list) {
+    let draggedKey = null;
+    list.querySelectorAll(".col-picker-row").forEach(row => {
+      row.addEventListener("dragstart", () => { draggedKey = row.dataset.col; });
+      row.addEventListener("dragover", e => e.preventDefault());
+      row.addEventListener("drop", e => {
+        e.preventDefault();
+        const targetKey = row.dataset.col;
+        if (!draggedKey || draggedKey === targetKey) return;
+        const from = dash.colOrder.indexOf(draggedKey);
+        const to = dash.colOrder.indexOf(targetKey);
+        if (from === -1 || to === -1) return;
+        dash.colOrder.splice(from, 1);
+        dash.colOrder.splice(to, 0, draggedKey);
+        draggedKey = null;
+        saveColOrder();
+        renderColumnPicker();
+        rerenderDetailTableOnly();
+      });
     });
   }
 
@@ -1072,6 +1160,7 @@
     wireSubtabs();
     wireTimeFilter();
     ensureVisibleCols();
+    ensureColOrder();
     renderColumnPicker();
     renderGroupByPicker();
   }
@@ -1115,6 +1204,7 @@
   async function fetchAndRenderDetailTable() {
     const seq = ++dash.detailSeq;
     ensureVisibleCols();
+    ensureColOrder();
     try {
       if (dash.detailGroupByLevels.length) {
         const params = currentFilterParams({
@@ -1334,7 +1424,7 @@
     dash.lastDetailGrouped = false;
     const thead = document.querySelector("#detailTable thead");
     const tbody = document.querySelector("#detailTable tbody");
-    const cols = TABLE_COLS.filter(c => dash.visibleCols.has(c.key));
+    const cols = orderedCols(TABLE_COLS);
 
     thead.innerHTML = "<tr>" + cols.map(c => {
       if (!SORTABLE_FLAT_COLUMNS.has(c.key)) return `<th>${escapeHtml(c.label)}</th>`;
@@ -1364,7 +1454,7 @@
     // rowCount is always shown (it's structural, not a TABLE_COLS entry) —
     // every other aggregate column is gated by the same column picker Set
     // used by the flat view, since their keys coincide.
-    const cols = GROUP_AGG_COLS.filter(c => c.key === "rowCount" || dash.visibleCols.has(c.key));
+    const cols = orderedCols(GROUP_AGG_COLS, ["rowCount"]);
 
     const groupTh = (() => {
       const activeClass = dash.detailSort === "groupValue" ? " sort-active" : "";
@@ -1434,7 +1524,7 @@
     if (state.isGrouped) {
       const nextLevel = level + 1;
       const nextGroupLabel = groupByLabel(dash.detailGroupByLevels[nextLevel]);
-      const cols = GROUP_AGG_COLS.filter(c => c.key === "rowCount" || dash.visibleCols.has(c.key));
+      const cols = orderedCols(GROUP_AGG_COLS, ["rowCount"]);
       const theadHtml = `<tr><th>${escapeHtml(nextGroupLabel)}</th>${cols.map(c => `<th>${escapeHtml(c.label)}</th>`).join("")}</tr>`;
       const bodyHtml = state.rows.length
         ? state.rows.map(r => renderGroupRowHtml(r, cols, nextLevel, pathFilters)).join("")
@@ -1447,7 +1537,7 @@
         </td></tr>`;
     }
 
-    const flatCols = TABLE_COLS.filter(c => dash.visibleCols.has(c.key));
+    const flatCols = orderedCols(TABLE_COLS);
     const rowsHtml = state.rows.map(row =>
       "<tr>" + flatCols.map(c => {
         const v = row[c.key];
@@ -1590,13 +1680,14 @@
     btn.textContent = "Đang xuất...";
     try {
       ensureVisibleCols();
+      ensureColOrder();
       // Export always uses the TOP-level group (index 0) only — a specific
       // nested branch isn't exportable, matching detailGroupByExportNote's
       // caption shown whenever more than 1 level is selected.
       const topGroupBy = dash.detailGroupByLevels[0];
       const exportCols = topGroupBy
-        ? ["groupValue", "rowCount", ...GROUP_AGG_COLS.filter(c => c.key !== "rowCount" && dash.visibleCols.has(c.key)).map(c => c.key)]
-        : TABLE_COLS.filter(c => dash.visibleCols.has(c.key)).map(c => c.key);
+        ? ["groupValue", "rowCount", ...orderedCols(GROUP_AGG_COLS).filter(c => c.key !== "rowCount").map(c => c.key)]
+        : orderedCols(TABLE_COLS).map(c => c.key);
       const params = currentFilterParams({
         search: dash.detailSearch, sort: dash.detailSort, sortDir: dash.detailSortDir,
         columns: exportCols.join(","),
