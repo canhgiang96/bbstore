@@ -22,7 +22,9 @@ DETAIL_COLUMNS = [
     "date", "orderId", "sku", "skuVariant", "product", "category", "customer",
     "quantity", "returnedQty", "soLuongThuc", "price", "originalPrice",
     "revenue", "doanhSo", "status", "trangThai", "discount", "voucher",
-    "platformFee", "piship", "phiAff", "thue", "phanLoaiKho", "phanLoaiMuc",
+    "platformFee", "piship", "phiAff", "thue",
+    "tongTienDaThanhToan", "soTienDieuChinh", "soTienDaThu", "conLai",
+    "phanLoaiKho", "phanLoaiMuc",
     "phanLoaiSp", "giaVon", "gmv", "doanhThuThuan", "nmv", "loiNhuanGop",
     "salesChannel", "kenhNho",
 ]
@@ -51,7 +53,9 @@ GROUP_SORT_COLUMNS = {
     "groupValue": "group_value", "rowCount": "row_count", "quantity": "quantity",
     "returnedQty": "returned_qty", "soLuongThuc": "so_luong_thuc", "doanhSo": "doanh_so",
     "discount": "discount", "voucher": "voucher", "platformFee": "platform_fee",
-    "piship": "piship", "phiAff": "phi_aff", "thue": "thue", "giaVon": "gia_von",
+    "piship": "piship", "phiAff": "phi_aff", "thue": "thue",
+    "tongTienDaThanhToan": "tong_tien_da_thanh_toan", "soTienDieuChinh": "so_tien_dieu_chinh",
+    "soTienDaThu": "so_tien_da_thu", "conLai": "con_lai", "giaVon": "gia_von",
     "gmv": "gmv", "doanhThuThuan": "doanh_thu_thuan", "nmv": "nmv", "loiNhuanGop": "loi_nhuan_gop",
 }
 
@@ -61,6 +65,7 @@ EMPTY_SUMMARY = {
     "kpis": {
         "doanhSo": 0, "gmv": 0, "huyChuaXK": 0, "huySauXK": 0, "hoan": 0,
         "discount": 0, "voucher": 0, "platformFee": 0, "piship": 0, "phiAff": 0, "thue": 0,
+        "tongTienDaThanhToan": 0, "soTienDieuChinh": 0, "soTienDaThu": 0, "conLai": 0,
         "doanhThuThuan": 0, "nmv": 0, "giaVon": 0, "loiNhuanGop": 0, "rowCount": 0,
         "doanhSoOrders": 0, "huyChuaXKOrders": 0, "huySauXKOrders": 0, "hoanOrders": 0,
         "gmvOrders": 0, "doanhThuThuanOrders": 0, "nmvOrders": 0, "pishipOrders": 0, "phiAffOrders": 0,
@@ -226,20 +231,21 @@ def _combo_join(combo_source) -> tuple[str, list, str, str, str]:
     return join_sql, [combo_source], sku_variant_expr, "COALESCE(cm.ratio, 1)", "cm.slot"
 
 
-def _cashflow_agg_join(con, available: set, cashflow_source) -> tuple[str, list, str, str, str]:
+def _cashflow_agg_join(con, available: set, cashflow_source) -> tuple[str, list, str, str, str, str]:
     """Returns (join_sql, join_params, aff_expr, platform_fee_expr,
-    thue_expr) to LEFT JOIN per-order Phí AFF (and, for TikTok Cashflow
-    Reports, Phí sàn; and Thuế GTGT+TNCN when the file has them) from ready
-    Cashflow Reports into an Orders query whose FROM clause is aliased "o".
-    All three expressions are always safe to use unconditionally — each is
-    a literal "0" when there's no cashflow data yet, when this Orders
-    Report predates the "orderPaidRatio" column (same backward-compat
-    pattern as discount/voucher/platformFee/piship), or — for
-    platform_fee_expr/thue_expr — when no uploaded Cashflow Report has that
-    column yet (Shopee's own Cashflow Reports never have "platformFee";
-    that fee comes from the Orders file itself instead — see
-    excel_to_parquet.py. "thue" only exists on Cashflow Reports converted
-    since 2026-09-08).
+    thue_expr, paid_expr) to LEFT JOIN per-order Phí AFF (and, for TikTok
+    Cashflow Reports, Phí sàn; and Thuế GTGT+TNCN / Tổng tiền đã thanh toán
+    when the file has them) from ready Cashflow Reports into an Orders
+    query whose FROM clause is aliased "o". All four expressions are always
+    safe to use unconditionally — each is a literal "0" when there's no
+    cashflow data yet, when this Orders Report predates the
+    "orderPaidRatio" column (same backward-compat pattern as discount/
+    voucher/platformFee/piship), or — for platform_fee_expr/thue_expr/
+    paid_expr — when no uploaded Cashflow Report has that column yet
+    (Shopee's own Cashflow Reports never have "platformFee"; that fee comes
+    from the Orders file itself instead — see excel_to_parquet.py. "thue"/
+    "tongTienDaThanhToan" only exist on Cashflow Reports converted since
+    2026-09-08/09).
 
     The GROUP BY in the subquery guards against the same Mã đơn hàng
     appearing in more than one uploaded Cashflow Report — summed once
@@ -247,22 +253,57 @@ def _cashflow_agg_join(con, available: set, cashflow_source) -> tuple[str, list,
     """
     order_ratio_col = 'COALESCE(o."orderPaidRatio", 0)' if "orderPaidRatio" in available else "0"
     if not cashflow_source:
-        return "", [], "0", "0", "0"
+        return "", [], "0", "0", "0", "0"
     cashflow_available = _available_columns(con, cashflow_source)
     has_platform_fee = "platformFee" in cashflow_available
     has_thue = "thue" in cashflow_available
+    has_paid = "tongTienDaThanhToan" in cashflow_available
     platform_fee_select = ', SUM("platformFee") AS cf_platform_fee' if has_platform_fee else ""
     thue_select = ', SUM("thue") AS cf_thue' if has_thue else ""
+    paid_select = ', SUM("tongTienDaThanhToan") AS cf_paid' if has_paid else ""
     join_sql = (
         'LEFT JOIN ('
-        f'SELECT "orderId" AS cf_order_id, SUM("phiAff") AS cf_phi_aff{platform_fee_select}{thue_select} '
+        f'SELECT "orderId" AS cf_order_id, SUM("phiAff") AS cf_phi_aff'
+        f'{platform_fee_select}{thue_select}{paid_select} '
         'FROM read_parquet(?, union_by_name=true) GROUP BY "orderId"'
         ') cf ON o."orderId" = cf.cf_order_id'
     )
     aff_expr = f'({order_ratio_col} * COALESCE(cf.cf_phi_aff, 0))'
     platform_fee_expr = f'({order_ratio_col} * COALESCE(cf.cf_platform_fee, 0))' if has_platform_fee else "0"
     thue_expr = f'({order_ratio_col} * COALESCE(cf.cf_thue, 0))' if has_thue else "0"
-    return join_sql, [cashflow_source], aff_expr, platform_fee_expr, thue_expr
+    paid_expr = f'({order_ratio_col} * COALESCE(cf.cf_paid, 0))' if has_paid else "0"
+    return join_sql, [cashflow_source], aff_expr, platform_fee_expr, thue_expr, paid_expr
+
+
+def _adjustment_agg_join(con, available: set, adjustment_source) -> tuple[str, list, str]:
+    """Returns (join_sql, join_params, adjustment_expr) to LEFT JOIN
+    per-order "Số tiền điều chỉnh" (Điều chỉnh doanh thu Reports, matched by
+    "Mã đơn hàng liên quan" = orderId) into an Orders query aliased "o" —
+    same shape/rationale as _cashflow_agg_join (query-time join, GROUP BY
+    guards against the same order appearing more than once — a real order
+    legitimately gets several separate adjustment events over time, e.g.
+    a return followed by a re-delivery, see adjustments_to_parquet.py).
+
+    Confirmed with the user 2026-09-09: unlike Thuế, the adjustment amount
+    keeps its file sign as-is (can be negative, e.g. a refund, or positive)
+    — feeds "Số tiền đã thu"/"Còn lại" below, never negated here.
+    """
+    order_ratio_col = 'COALESCE(o."orderPaidRatio", 0)' if "orderPaidRatio" in available else "0"
+    if not adjustment_source:
+        return "", [], "0"
+    adjustment_available = _available_columns(con, adjustment_source)
+    if "relatedOrderId" not in adjustment_available or "amount" not in adjustment_available:
+        return "", [], "0"
+    join_sql = (
+        'LEFT JOIN ('
+        'SELECT "relatedOrderId" AS adj_order_id, SUM("amount") AS adj_amount '
+        'FROM read_parquet(?, union_by_name=true) '
+        'WHERE "relatedOrderId" IS NOT NULL AND "relatedOrderId" != \'\' '
+        'GROUP BY "relatedOrderId"'
+        ') adj ON o."orderId" = adj.adj_order_id'
+    )
+    adjustment_expr = f'({order_ratio_col} * COALESCE(adj.adj_amount, 0))'
+    return join_sql, [adjustment_source], adjustment_expr
 
 
 def _master_join(master_source, sku_variant_expr: str) -> tuple[str, list, str, str, str, str]:
@@ -402,6 +443,7 @@ def _build_orders_working(
     con, parquet_source, available: set, combo_source, cashflow_source, master_source,
     aff_source=None, inhouse_handles=None,
     channel_source: dict | None = None, from_date=None, to_date=None,
+    adjustment_source=None,
 ) -> None:
     """Materializes a TEMP TABLE "orders_working" combining the Combo
     explosion and the Phí AFF join exactly once per call — every query below
@@ -436,8 +478,12 @@ def _build_orders_working(
     channel_override_col = '"channelOverride"' if "channelOverride" in available else "NULL"
 
     combo_join_sql, combo_params, sku_variant_expr, ratio_expr, slot_expr = _combo_join(combo_source)
-    cashflow_join_sql, cashflow_params, aff_expr, cashflow_platform_fee_expr, cashflow_thue_expr = _cashflow_agg_join(
-        con, available, cashflow_source
+    (
+        cashflow_join_sql, cashflow_params, aff_expr,
+        cashflow_platform_fee_expr, cashflow_thue_expr, cashflow_paid_expr,
+    ) = _cashflow_agg_join(con, available, cashflow_source)
+    adjustment_join_sql, adjustment_params, adjustment_expr = _adjustment_agg_join(
+        con, available, adjustment_source
     )
     master_join_sql, master_params, muc_expr, phan_loai_sp_expr, phan_loai_kho_expr, gia_von_expr = _master_join(
         master_source, sku_variant_expr
@@ -522,6 +568,16 @@ def _build_orders_working(
         f'CASE WHEN o."trangThai" IN {GMV_STATUSES_SQL} THEN o."soLuongThuc" * {gia_von_expr} ELSE 0 END'
     )
     loi_nhuan_gop_row_expr = f"({nmv_row_expr} - {scoped_gia_von_row_expr})"
+    # "Số tiền đã thu"/"Còn lại" — real-settlement reconciliation, confirmed
+    # with the user 2026-09-09: Số tiền đã thu = Tổng tiền đã thanh toán
+    # (Cashflow) + Số tiền điều chỉnh (Điều chỉnh doanh thu, kept as-is —
+    # can be negative), and theo lý thuyết should equal NMV - Thuế; Còn lại
+    # is the gap between the two (money not yet actually settled/reflected).
+    # Same not-status-scoped treatment as platformFee/piship/phiAff/thue.
+    tong_tien_da_thanh_toan_row_expr = f"(({cashflow_paid_expr}) * {ratio_expr})"
+    so_tien_dieu_chinh_row_expr = f"(({adjustment_expr}) * {ratio_expr})"
+    so_tien_da_thu_row_expr = f"({tong_tien_da_thanh_toan_row_expr} + {so_tien_dieu_chinh_row_expr})"
+    con_lai_row_expr = f"({nmv_row_expr} - {thue_row_expr} - {so_tien_da_thu_row_expr})"
 
     create_sql = f"""
         CREATE OR REPLACE TEMP TABLE orders_working AS
@@ -548,6 +604,10 @@ def _build_orders_working(
           CASE WHEN ({slot_expr} IS NULL OR {slot_expr} = 1) AND o."trangThai" != 'Hủy chưa XK' THEN {piship_col} ELSE 0 END AS "piship",
           ({aff_expr}) * {ratio_expr} AS "phiAff",
           {thue_row_expr} AS "thue",
+          {tong_tien_da_thanh_toan_row_expr} AS "tongTienDaThanhToan",
+          {so_tien_dieu_chinh_row_expr} AS "soTienDieuChinh",
+          {so_tien_da_thu_row_expr} AS "soTienDaThu",
+          {con_lai_row_expr} AS "conLai",
           {warehouse_expr} AS "phanLoaiKho",
           {item_group_expr} AS "phanLoaiMuc",
           {product_type_expr} AS "phanLoaiSp",
@@ -562,14 +622,15 @@ def _build_orders_working(
         FROM (SELECT * FROM ({channel_source_sql}) t {date_filter_sql}) o
         {combo_join_sql}
         {cashflow_join_sql}
+        {adjustment_join_sql}
         {master_join_sql}
         {aff_channel_join_sql}
     """
     con.execute(
         create_sql,
         [
-            *channel_params, *date_filter_params, *combo_params, *cashflow_params, *master_params,
-            *aff_channel_params,
+            *channel_params, *date_filter_params, *combo_params, *cashflow_params, *adjustment_params,
+            *master_params, *aff_channel_params,
         ],
     )
 
@@ -578,7 +639,7 @@ def _prepare_orders_working(
     con, parquet_source, from_date, to_date, category, status, warehouse_type,
     item_group, product_type, sku, sales_channel,
     combo_source, cashflow_source, master_source, channel_source,
-    kenh_nho=None, aff_source=None, inhouse_handles=None,
+    kenh_nho=None, aff_source=None, inhouse_handles=None, adjustment_source=None,
 ) -> tuple[str, list, set]:
     """Shared setup for every run_*_query function below: builds the WHERE
     clause for the requested filters and materializes orders_working on
@@ -596,7 +657,7 @@ def _prepare_orders_working(
     _build_orders_working(
         con, parquet_source, available, combo_source, cashflow_source, master_source,
         aff_source, inhouse_handles, channel_source,
-        from_date=from_date, to_date=to_date,
+        from_date=from_date, to_date=to_date, adjustment_source=adjustment_source,
     )
     return where_sql, params, available
 
@@ -606,7 +667,7 @@ def run_summary_query(
     cashflow_source=None, combo_source=None, master_source=None,
     warehouse_type=None, item_group=None, product_type=None, sku=None,
     channel_source=None, sales_channel=None,
-    kenh_nho=None, aff_source=None, inhouse_handles=None,
+    kenh_nho=None, aff_source=None, inhouse_handles=None, adjustment_source=None,
 ) -> dict:
     if _is_empty_source(parquet_source):
         return EMPTY_SUMMARY
@@ -617,7 +678,7 @@ def run_summary_query(
             con, parquet_source, from_date, to_date, category, status, warehouse_type,
             item_group, product_type, sku, sales_channel,
             combo_source, cashflow_source, master_source, channel_source,
-            kenh_nho, aff_source, inhouse_handles,
+            kenh_nho, aff_source, inhouse_handles, adjustment_source,
         )
 
         # *_orders columns are COUNT(DISTINCT "orderId") over exactly the
@@ -640,6 +701,10 @@ def run_summary_query(
               COALESCE(SUM("piship"), 0) AS piship,
               COALESCE(SUM("phiAff"), 0) AS phi_aff,
               COALESCE(SUM("thue"), 0) AS thue,
+              COALESCE(SUM("tongTienDaThanhToan"), 0) AS tong_tien_da_thanh_toan,
+              COALESCE(SUM("soTienDieuChinh"), 0) AS so_tien_dieu_chinh,
+              COALESCE(SUM("soTienDaThu"), 0) AS so_tien_da_thu,
+              COALESCE(SUM("conLai"), 0) AS con_lai,
               COALESCE(SUM(CASE WHEN "trangThai" IN {GMV_STATUSES_SQL} THEN "giaVon" ELSE 0 END), 0) AS gia_von,
               COUNT(*) AS row_count,
               COUNT(DISTINCT "orderId") AS doanh_so_orders,
@@ -656,7 +721,9 @@ def run_summary_query(
         """
         (
             total, gmv, huy_chua_xk, huy_sau_xk, hoan, discount, voucher,
-            platform_fee, piship, phi_aff, thue, gia_von, row_count,
+            platform_fee, piship, phi_aff, thue,
+            tong_tien_da_thanh_toan, so_tien_dieu_chinh, so_tien_da_thu, con_lai,
+            gia_von, row_count,
             doanh_so_orders, gmv_orders, huy_chua_xk_orders, huy_sau_xk_orders, hoan_orders,
             nmv_orders, piship_orders, phi_aff_orders,
         ) = con.execute(totals_sql, params).fetchone()
@@ -702,6 +769,7 @@ def run_summary_query(
             _build_orders_working(
                 con, parquet_source, available, combo_source, cashflow_source, master_source,
                 aff_source, inhouse_handles, channel_source, from_date=None, to_date=None,
+                adjustment_source=adjustment_source,
             )
         facets_sql = """
             SELECT
@@ -731,6 +799,10 @@ def run_summary_query(
                 "piship": piship,
                 "phiAff": phi_aff,
                 "thue": thue,
+                "tongTienDaThanhToan": tong_tien_da_thanh_toan,
+                "soTienDieuChinh": so_tien_dieu_chinh,
+                "soTienDaThu": so_tien_da_thu,
+                "conLai": con_lai,
                 "doanhThuThuan": doanh_thu_thuan,
                 "nmv": nmv,
                 "giaVon": gia_von,
@@ -803,7 +875,7 @@ def run_rows_query(
     cashflow_source=None, combo_source=None, master_source=None,
     warehouse_type=None, item_group=None, product_type=None, sku=None,
     path_filters=None, channel_source=None, sales_channel=None,
-    kenh_nho=None, aff_source=None, inhouse_handles=None,
+    kenh_nho=None, aff_source=None, inhouse_handles=None, adjustment_source=None,
 ) -> dict:
     page = max(1, page)
     if _is_empty_source(parquet_source):
@@ -815,7 +887,7 @@ def run_rows_query(
             con, parquet_source, from_date, to_date, category, status, warehouse_type,
             item_group, product_type, sku, sales_channel,
             combo_source, cashflow_source, master_source, channel_source,
-            kenh_nho, aff_source, inhouse_handles,
+            kenh_nho, aff_source, inhouse_handles, adjustment_source,
         )
 
         # Drill-down request from a (possibly nested) group node in the
@@ -868,6 +940,10 @@ def _grouped_agg_sql(where_sql: str, group_col: str) -> str:
           COALESCE(SUM("piship"), 0) AS piship,
           COALESCE(SUM("phiAff"), 0) AS phi_aff,
           COALESCE(SUM("thue"), 0) AS thue,
+          COALESCE(SUM("tongTienDaThanhToan"), 0) AS tong_tien_da_thanh_toan,
+          COALESCE(SUM("soTienDieuChinh"), 0) AS so_tien_dieu_chinh,
+          COALESCE(SUM("soTienDaThu"), 0) AS so_tien_da_thu,
+          COALESCE(SUM("conLai"), 0) AS con_lai,
           COALESCE(SUM("giaVon"), 0) AS gia_von,
           COALESCE(SUM("gmv"), 0) AS gmv,
           COALESCE(SUM("doanhThuThuan"), 0) AS doanh_thu_thuan,
@@ -885,7 +961,10 @@ def _grouped_row_dict(r: dict) -> dict:
         "soLuongThuc": r["so_luong_thuc"], "doanhSo": r["doanh_so"],
         "discount": r["discount"], "voucher": r["voucher"],
         "platformFee": r["platform_fee"], "piship": r["piship"],
-        "phiAff": r["phi_aff"], "thue": r["thue"], "giaVon": r["gia_von"],
+        "phiAff": r["phi_aff"], "thue": r["thue"],
+        "tongTienDaThanhToan": r["tong_tien_da_thanh_toan"], "soTienDieuChinh": r["so_tien_dieu_chinh"],
+        "soTienDaThu": r["so_tien_da_thu"], "conLai": r["con_lai"],
+        "giaVon": r["gia_von"],
         "gmv": r["gmv"], "doanhThuThuan": r["doanh_thu_thuan"],
         "nmv": r["nmv"], "loiNhuanGop": r["loi_nhuan_gop"],
     }
@@ -898,7 +977,7 @@ def run_grouped_rows_query(
     cashflow_source=None, combo_source=None, master_source=None,
     warehouse_type=None, item_group=None, product_type=None, sku=None,
     path_filters=None, channel_source=None, sales_channel=None,
-    kenh_nho=None, aff_source=None, inhouse_handles=None,
+    kenh_nho=None, aff_source=None, inhouse_handles=None, adjustment_source=None,
 ) -> dict:
     """Server-side group-by-column aggregation over orders_working — the
     "Group theo" mode of the Detail-table sub-tab. Never loads the raw row
@@ -923,7 +1002,7 @@ def run_grouped_rows_query(
             con, parquet_source, from_date, to_date, category, status, warehouse_type,
             item_group, product_type, sku, sales_channel,
             combo_source, cashflow_source, master_source, channel_source,
-            kenh_nho, aff_source, inhouse_handles,
+            kenh_nho, aff_source, inhouse_handles, adjustment_source,
         )
         where_sql = _apply_path_filters(where_sql, params, path_filters)
         where_sql = _apply_search_filter(where_sql, params, search)
@@ -958,7 +1037,7 @@ def run_export_query(
     cashflow_source=None, combo_source=None, master_source=None,
     warehouse_type=None, item_group=None, product_type=None, sku=None,
     channel_source=None, sales_channel=None,
-    kenh_nho=None, aff_source=None, inhouse_handles=None,
+    kenh_nho=None, aff_source=None, inhouse_handles=None, adjustment_source=None,
 ) -> list[dict]:
     """Pulls the ENTIRE result set matching the current filters (no LIMIT/
     OFFSET) for the Excel export — grouped aggregate rows when group_by is
@@ -974,7 +1053,7 @@ def run_export_query(
             con, parquet_source, from_date, to_date, category, status, warehouse_type,
             item_group, product_type, sku, sales_channel,
             combo_source, cashflow_source, master_source, channel_source,
-            kenh_nho, aff_source, inhouse_handles,
+            kenh_nho, aff_source, inhouse_handles, adjustment_source,
         )
         where_sql = _apply_search_filter(where_sql, params, search)
 

@@ -314,6 +314,32 @@
           </div>
         </div>
 
+        <div class="kpi-grid kpi-grid-2">
+          <div class="kpi-card">
+            <div class="kpi-label">Tổng tiền đã thanh toán</div>
+            <div class="kpi-value" id="kpiTongTienDaThanhToan">–</div>
+            <div class="kpi-sub">Từ file Dòng tiền (Shopee)</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Số tiền điều chỉnh</div>
+            <div class="kpi-value" id="kpiSoTienDieuChinh">–</div>
+            <div class="kpi-sub">Từ file Điều chỉnh doanh thu</div>
+          </div>
+        </div>
+
+        <div class="kpi-grid kpi-grid-2">
+          <div class="kpi-card">
+            <div class="kpi-label">Số tiền đã thu</div>
+            <div class="kpi-value" id="kpiSoTienDaThu">–</div>
+            <div class="kpi-sub">Tổng tiền đã thanh toán + Số tiền điều chỉnh — về lý thuyết bằng NMV − Thuế</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Còn lại</div>
+            <div class="kpi-value" id="kpiConLai">–</div>
+            <div class="kpi-sub">NMV − Thuế − Số tiền đã thu</div>
+          </div>
+        </div>
+
       </div>
 
       <div id="dashboardDetail" hidden>
@@ -622,7 +648,7 @@
 
 </div><!-- /#appShell -->
 
-<script src="js/api.js?v=42"></script>
-<script src="js/app.js?v=42"></script>
+<script src="js/api.js?v=43"></script>
+<script src="js/app.js?v=43"></script>
 </body>
 </html>

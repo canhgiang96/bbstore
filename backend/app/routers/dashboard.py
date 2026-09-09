@@ -33,6 +33,8 @@ DETAIL_COLUMN_LABELS = {
     "price": "Giá bán", "originalPrice": "Giá gốc", "revenue": "Doanh thu", "doanhSo": "Doanh số",
     "status": "Status", "trangThai": "Trạng thái", "discount": "Giảm giá", "voucher": "Voucher",
     "platformFee": "Phí sàn", "piship": "Phí Piship", "phiAff": "Phí AFF", "thue": "Thuế",
+    "tongTienDaThanhToan": "Tổng tiền đã thanh toán", "soTienDieuChinh": "Số tiền điều chỉnh",
+    "soTienDaThu": "Số tiền đã thu", "conLai": "Còn lại",
     "phanLoaiKho": "Phân loại kho", "phanLoaiMuc": "Phân loại mục", "phanLoaiSp": "Phân loại sản phẩm",
     "giaVon": "Giá vốn", "gmv": "GMV", "doanhThuThuan": "Doanh thu thuần", "nmv": "NMV",
     "loiNhuanGop": "Lợi nhuận gộp", "salesChannel": "Kênh bán hàng", "kenhNho": "Kênh nhỏ",
@@ -46,7 +48,9 @@ GROUP_BY_LABELS = {
 GROUP_AGG_LABELS = {
     "rowCount": "Số dòng", "quantity": "Số lượng", "returnedQty": "SL hoàn trả",
     "soLuongThuc": "SL thực", "doanhSo": "Doanh số", "discount": "Giảm giá", "voucher": "Voucher",
-    "platformFee": "Phí sàn", "piship": "Phí Piship", "phiAff": "Phí AFF", "thue": "Thuế", "giaVon": "Giá vốn",
+    "platformFee": "Phí sàn", "piship": "Phí Piship", "phiAff": "Phí AFF", "thue": "Thuế",
+    "tongTienDaThanhToan": "Tổng tiền đã thanh toán", "soTienDieuChinh": "Số tiền điều chỉnh",
+    "soTienDaThu": "Số tiền đã thu", "conLai": "Còn lại", "giaVon": "Giá vốn",
     "gmv": "GMV", "doanhThuThuan": "Doanh thu thuần", "nmv": "NMV", "loiNhuanGop": "Lợi nhuận gộp",
 }
 
@@ -137,6 +141,19 @@ async def _all_ready_master_parquet_paths() -> list:
     return await _download_all([r for r in reports if r.get("parquet_key")])
 
 
+async def _all_ready_adjustments_parquet_paths() -> list:
+    """Every ready Điều chỉnh doanh thu Report's Parquet — joined into the
+    Orders query at query time for "Số tiền đã thu"/"Còn lại" (see
+    query_engine._adjustment_agg_join), same query-time rationale and
+    best-effort []-on-error fallback as Cashflow/Combo/Master File/Kênh AFF.
+    """
+    try:
+        reports = await db.pg_select("adjustments_reports", {"status": "eq.ready", "select": "id,parquet_key"})
+    except Exception:  # noqa: BLE001 — Số tiền đã thu/Còn lại are best-effort, never worth 500ing the whole Dashboard for
+        return []
+    return await _download_all([r for r in reports if r.get("parquet_key")])
+
+
 async def _fetch_sales_channels() -> list:
     try:
         return await db.pg_select("sales_channels", {"select": "id,name"})
@@ -190,21 +207,28 @@ async def _orders_paths_and_channel_groups(reports: list) -> tuple[list, dict]:
     return list(paths), groups
 
 
-async def _all_dashboard_sources(reports: list) -> tuple[list, list, list, list, dict, list, list]:
+async def _all_dashboard_sources(reports: list) -> tuple[list, list, list, list, dict, list, list, list]:
     """Fetches every supporting dataset needed by the Dashboard's query
     engine concurrently instead of one sequential await per dataset — each
     is an independent Supabase (+ R2 download) round trip, so awaiting them
     one at a time was pure added latency on every single Dashboard request.
     """
-    (paths, channel_paths), cashflow_paths, combo_paths, master_paths, aff_paths, inhouse_handles = await asyncio.gather(
+    (
+        (paths, channel_paths), cashflow_paths, combo_paths, master_paths,
+        aff_paths, inhouse_handles, adjustment_paths,
+    ) = await asyncio.gather(
         _orders_paths_and_channel_groups(reports),
         _all_ready_cashflow_parquet_paths(),
         _all_ready_combo_parquet_paths(),
         _all_ready_master_parquet_paths(),
         _all_ready_aff_channel_parquet_paths(),
         _fetch_inhouse_handles(),
+        _all_ready_adjustments_parquet_paths(),
     )
-    return paths, cashflow_paths, combo_paths, master_paths, channel_paths, aff_paths, inhouse_handles
+    return (
+        paths, cashflow_paths, combo_paths, master_paths, channel_paths, aff_paths, inhouse_handles,
+        adjustment_paths,
+    )
 
 
 @dashboard_router.get("/summary", response_model=SummaryOut)
@@ -222,7 +246,7 @@ async def dashboard_summary(
     user: dict = Depends(get_current_user),
 ):
     reports = await _all_ready_reports()
-    paths, cashflow_paths, combo_paths, master_paths, channel_paths, aff_paths, inhouse_handles = (
+    paths, cashflow_paths, combo_paths, master_paths, channel_paths, aff_paths, inhouse_handles, adjustment_paths = (
         await _all_dashboard_sources(reports)
     )
     # DuckDB building/querying orders_working is sync and can take real time
@@ -234,7 +258,7 @@ async def dashboard_summary(
         cashflow_source=cashflow_paths, combo_source=combo_paths, master_source=master_paths,
         warehouse_type=warehouseType, item_group=itemGroup, product_type=productType, sku=sku,
         channel_source=channel_paths, sales_channel=salesChannel,
-        kenh_nho=kenhNho, aff_source=aff_paths, inhouse_handles=inhouse_handles,
+        kenh_nho=kenhNho, aff_source=aff_paths, inhouse_handles=inhouse_handles, adjustment_source=adjustment_paths,
     )
 
 
@@ -274,7 +298,7 @@ async def dashboard_rows(
 ):
     path_filters = _zip_path_filters(pathBy, pathValue)
     reports = await _all_ready_reports()
-    paths, cashflow_paths, combo_paths, master_paths, channel_paths, aff_paths, inhouse_handles = (
+    paths, cashflow_paths, combo_paths, master_paths, channel_paths, aff_paths, inhouse_handles, adjustment_paths = (
         await _all_dashboard_sources(reports)
     )
     return await run_in_threadpool(
@@ -284,7 +308,7 @@ async def dashboard_rows(
         cashflow_source=cashflow_paths, combo_source=combo_paths, master_source=master_paths,
         warehouse_type=warehouseType, item_group=itemGroup, product_type=productType, sku=sku,
         path_filters=path_filters, channel_source=channel_paths, sales_channel=salesChannel,
-        kenh_nho=kenhNho, aff_source=aff_paths, inhouse_handles=inhouse_handles,
+        kenh_nho=kenhNho, aff_source=aff_paths, inhouse_handles=inhouse_handles, adjustment_source=adjustment_paths,
     )
 
 
@@ -314,7 +338,7 @@ async def dashboard_rows_grouped(
         raise HTTPException(status_code=400, detail=f"groupBy không hợp lệ: {groupBy}")
     path_filters = _zip_path_filters(pathBy, pathValue)
     reports = await _all_ready_reports()
-    paths, cashflow_paths, combo_paths, master_paths, channel_paths, aff_paths, inhouse_handles = (
+    paths, cashflow_paths, combo_paths, master_paths, channel_paths, aff_paths, inhouse_handles, adjustment_paths = (
         await _all_dashboard_sources(reports)
     )
     return await run_in_threadpool(
@@ -324,7 +348,7 @@ async def dashboard_rows_grouped(
         cashflow_source=cashflow_paths, combo_source=combo_paths, master_source=master_paths,
         warehouse_type=warehouseType, item_group=itemGroup, product_type=productType, sku=sku,
         path_filters=path_filters, channel_source=channel_paths, sales_channel=salesChannel,
-        kenh_nho=kenhNho, aff_source=aff_paths, inhouse_handles=inhouse_handles,
+        kenh_nho=kenhNho, aff_source=aff_paths, inhouse_handles=inhouse_handles, adjustment_source=adjustment_paths,
     )
 
 
@@ -362,7 +386,7 @@ async def dashboard_export(
         raise HTTPException(status_code=400, detail="Không có cột hợp lệ để xuất.")
 
     reports = await _all_ready_reports()
-    paths, cashflow_paths, combo_paths, master_paths, channel_paths, aff_paths, inhouse_handles = (
+    paths, cashflow_paths, combo_paths, master_paths, channel_paths, aff_paths, inhouse_handles, adjustment_paths = (
         await _all_dashboard_sources(reports)
     )
     rows = await run_in_threadpool(
@@ -372,7 +396,7 @@ async def dashboard_export(
         cashflow_source=cashflow_paths, combo_source=combo_paths, master_source=master_paths,
         warehouse_type=warehouseType, item_group=itemGroup, product_type=productType, sku=sku,
         channel_source=channel_paths, sales_channel=salesChannel,
-        kenh_nho=kenhNho, aff_source=aff_paths, inhouse_handles=inhouse_handles,
+        kenh_nho=kenhNho, aff_source=aff_paths, inhouse_handles=inhouse_handles, adjustment_source=adjustment_paths,
     )
 
     labels = {**GROUP_AGG_LABELS, "groupValue": GROUP_BY_LABELS.get(groupBy, "Nhóm")} if groupBy else DETAIL_COLUMN_LABELS

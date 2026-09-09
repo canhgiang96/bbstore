@@ -107,6 +107,10 @@ class KpiOut(BaseModel):
     piship: float
     phiAff: float
     thue: float
+    tongTienDaThanhToan: float
+    soTienDieuChinh: float
+    soTienDaThu: float
+    conLai: float
     doanhThuThuan: float
     nmv: float
     giaVon: float

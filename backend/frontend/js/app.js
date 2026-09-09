@@ -1196,6 +1196,10 @@
     { label: "Giá vốn", valueId: "kpiGiaVon", pctId: "kpiGiaVonPct", value: k => k.giaVon, base: k => k.doanhThuThuan, note: "Số lượng thực x Giá vốn (Master File)" },
     { label: "Thuế", valueId: "kpiThue", pctId: "kpiThuePct", value: k => k.thue, base: k => k.doanhThuThuan, note: "Thuế GTGT + Thuế TNCN (Shopee) — chỉ để tham khảo, không trừ vào NMV" },
     { label: "Lợi nhuận gộp", valueId: "kpiLoiNhuanGop", pctId: "kpiLoiNhuanGopPct", value: k => k.loiNhuanGop, base: k => k.doanhThuThuan, note: "NMV − Giá vốn" },
+    { label: "Tổng tiền đã thanh toán", valueId: "kpiTongTienDaThanhToan", value: k => k.tongTienDaThanhToan, note: "Từ file Dòng tiền (Shopee)" },
+    { label: "Số tiền điều chỉnh", valueId: "kpiSoTienDieuChinh", value: k => k.soTienDieuChinh, note: "Từ file Điều chỉnh doanh thu" },
+    { label: "Số tiền đã thu", valueId: "kpiSoTienDaThu", value: k => k.soTienDaThu, note: "Tổng tiền đã thanh toán + Số tiền điều chỉnh — về lý thuyết bằng NMV − Thuế" },
+    { label: "Còn lại", valueId: "kpiConLai", value: k => k.conLai, note: "NMV − Thuế − Số tiền đã thu" },
   ];
 
   function fmtOrders(n) {
@@ -1234,6 +1238,10 @@
     { key: "piship", label: "Phí Piship", fmt: v => fmtNumber(v) },
     { key: "phiAff", label: "Phí AFF", fmt: v => fmtNumber(v) },
     { key: "thue", label: "Thuế", fmt: v => fmtNumber(v) },
+    { key: "tongTienDaThanhToan", label: "Tổng tiền đã thanh toán", fmt: v => fmtNumber(v) },
+    { key: "soTienDieuChinh", label: "Số tiền điều chỉnh", fmt: v => fmtNumber(v) },
+    { key: "soTienDaThu", label: "Số tiền đã thu", fmt: v => fmtNumber(v) },
+    { key: "conLai", label: "Còn lại", fmt: v => fmtNumber(v) },
     { key: "nmv", label: "NMV", fmt: v => fmtNumber(v) },
     { key: "phanLoaiKho", label: "Phân loại kho" },
     { key: "phanLoaiMuc", label: "Phân loại mục" },
@@ -1277,6 +1285,10 @@
     { key: "piship", label: "Phí Piship", fmt: v => fmtNumber(v) },
     { key: "phiAff", label: "Phí AFF", fmt: v => fmtNumber(v) },
     { key: "thue", label: "Thuế", fmt: v => fmtNumber(v) },
+    { key: "tongTienDaThanhToan", label: "Tổng tiền đã thanh toán", fmt: v => fmtNumber(v) },
+    { key: "soTienDieuChinh", label: "Số tiền điều chỉnh", fmt: v => fmtNumber(v) },
+    { key: "soTienDaThu", label: "Số tiền đã thu", fmt: v => fmtNumber(v) },
+    { key: "conLai", label: "Còn lại", fmt: v => fmtNumber(v) },
     { key: "nmv", label: "NMV", fmt: v => fmtNumber(v) },
     { key: "giaVon", label: "Giá vốn", fmt: v => fmtNumber(v) },
     { key: "loiNhuanGop", label: "Lợi nhuận gộp", fmt: v => fmtNumber(v) },

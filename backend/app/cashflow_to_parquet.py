@@ -23,6 +23,13 @@ computed whenever the file has those columns, regardless of channel —
 Shopee's plain-named columns and TikTok's "... do TikTok Shop khấu trừ"
 columns both resolve to the same vatWithheld/pitWithheld mapping keys.
 
+Also passes through Shopee's "Tổng tiền đã thanh toán" as-is (already
+positive in the source file, unlike phiAff/thue) — the actual settlement
+amount Shopee paid the seller for that order, used alongside "Thuế" and
+the Điều chỉnh doanh thu file's "Số tiền điều chỉnh" for the "Số tiền đã
+thu"/"Còn lại" reconciliation KPIs (see query_engine.py, confirmed with
+the user 2026-09-09).
+
 For a fully-refunded TikTok order (its rows' "Tổng doanh thu" nets to 0),
 the affiliate-commission columns are treated as 0 in both formulas above —
 see _REVENUE_EPSILON's comment for why. Thuế/vatWithheld/pitWithheld are
@@ -60,6 +67,7 @@ CASHFLOW_KEYWORDS = {
     "vatWithheld": ["thue gtgt do tiktok shop khau tru", "thue gtgt"],
     "pitWithheld": ["thue tncn do tiktok shop khau tru", "thue tncn"],
     "totalRevenue": ["tong doanh thu"],
+    "totalPaidAmount": ["tong tien da thanh toan"],
 }
 
 # On a full return, TikTok's own settlement rows for an order net "Tổng
@@ -123,12 +131,14 @@ def cashflow_excel_to_parquet(file_like, sheet_name=0) -> tuple[bytes, int, dict
     """Returns (parquet_bytes, row_count, resolved_mapping).
 
     Each output row is {"orderId": ..., "phiAff": ..., "platformFee": ...,
-    "thue": ...} — "platformFee" is 0 for a Shopee-style file (its Phí sàn
-    already comes from the Orders file) and only nonzero when the
-    TikTok-style component columns were detected instead of Shopee's single
-    combined column. "thue" is 0 whenever the file has neither a vatWithheld
-    nor pitWithheld column. One row per source row — the user confirmed
-    each Mã đơn hàng appears exactly once per file.
+    "thue": ..., "tongTienDaThanhToan": ...} — "platformFee" is 0 for a
+    Shopee-style file (its Phí sàn already comes from the Orders file) and
+    only nonzero when the TikTok-style component columns were detected
+    instead of Shopee's single combined column. "thue" is 0 whenever the
+    file has neither a vatWithheld nor pitWithheld column.
+    "tongTienDaThanhToan" is 0 whenever the file has no "Tổng tiền đã
+    thanh toán" column (TikTok's export doesn't). One row per source row —
+    the user confirmed each Mã đơn hàng appears exactly once per file.
     """
     raw_rows, headers = read_excel_rows(file_like, sheet_name=sheet_name)
     mapping = detect_cashflow_mapping(headers)
@@ -156,6 +166,7 @@ def cashflow_excel_to_parquet(file_like, sheet_name=0) -> tuple[bytes, int, dict
     revenue_col = mapping.get("totalRevenue")
     vat_col = mapping.get("vatWithheld")
     pit_col = mapping.get("pitWithheld")
+    paid_col = mapping.get("totalPaidAmount")
 
     included_rows = []
     order_revenue_totals: dict[str, float] = {}
@@ -187,8 +198,12 @@ def cashflow_excel_to_parquet(file_like, sheet_name=0) -> tuple[bytes, int, dict
             phi_aff = -(aff1 + aff2)
             platform_fee = -(total_fee - aff1 - aff2 - vat - pit)
         thue = -(vat + pit)
+        tong_tien_da_thanh_toan = to_number(row.get(paid_col)) if paid_col else 0.0
 
-        rows.append({"orderId": order_id, "phiAff": phi_aff, "platformFee": platform_fee, "thue": thue})
+        rows.append({
+            "orderId": order_id, "phiAff": phi_aff, "platformFee": platform_fee,
+            "thue": thue, "tongTienDaThanhToan": tong_tien_da_thanh_toan,
+        })
 
     if not rows:
         raise CashflowMappingError("Không có dòng dữ liệu hợp lệ nào (không đọc được Mã đơn hàng ở bất kỳ dòng nào).")

@@ -133,6 +133,37 @@ def test_shopee_style_file_computes_thue_from_plain_vat_pit_headers():
     assert (df["platformFee"] == 0).all()
 
 
+SHOPEE_SETTLEMENT_HEADERS = SHOPEE_TAX_HEADERS + ["Tổng tiền đã thanh toán"]
+
+SHOPEE_SETTLEMENT_ROWS = [
+    ["T1", "O1", 0, -3218, -1609, 212768],
+    ["T2", "O2", -30139, -5814, -2907, 379972],
+]
+
+
+def test_shopee_style_file_passes_through_total_paid_amount_as_is():
+    # "Tổng tiền đã thanh toán" is already positive in the real source file
+    # (unlike thue/phiAff, which are stored negative and flipped) — user
+    # confirmed 2026-09-09 it feeds "Số tiền đã thu"/"Còn lại" alongside
+    # thue and the Điều chỉnh doanh thu file's "Số tiền điều chỉnh".
+    parquet_bytes, _, mapping = cashflow_excel_to_parquet(
+        make_xlsx_bytes(SHOPEE_SETTLEMENT_HEADERS, SHOPEE_SETTLEMENT_ROWS)
+    )
+    assert mapping["totalPaidAmount"] == "Tổng tiền đã thanh toán"
+    df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
+    by_order = df.set_index("orderId")
+    assert by_order.loc["O1", "tongTienDaThanhToan"] == 212768
+    assert by_order.loc["O2", "tongTienDaThanhToan"] == 379972
+
+
+def test_total_paid_amount_is_zero_when_column_absent():
+    # TikTok's "income" export has no such column — must default to 0, not error.
+    parquet_bytes, _, mapping = cashflow_excel_to_parquet(make_xlsx_bytes())
+    assert "totalPaidAmount" not in mapping
+    df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
+    assert (df["tongTienDaThanhToan"] == 0).all()
+
+
 # TikTok's "income" export headers/values (confirmed with the user against
 # a real file, 2026-08-26/27) — Phí AFF = Hoa hồng liên kết + Hoa hồng
 # liên kết Quảng cáo cửa hàng; Phí sàn = Tổng phí minus those two minus

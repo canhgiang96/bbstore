@@ -543,6 +543,39 @@ hơn:**
   - Đã verify bằng file thật `T8-6.9.xlsx`: tổng Thuế = 67.727.902,
     NMV/Lợi nhuận gộp không đổi khi có/không có cashflow_source.
 
+## 26. "Số tiền đã thu"/"Còn lại" — đối chiếu tiền thực nhận với NMV − Thuế
+
+- **User yêu cầu 2026-09-09**: lấy "Tổng tiền đã thanh toán" (file Dòng
+  tiền Shopee, đã dương sẵn) + "Số tiền điều chỉnh" (file Điều chỉnh
+  doanh thu, giữ nguyên dấu âm/dương trong file) để tính:
+  - Số tiền đã thu (1 đơn) = Tổng tiền đã thanh toán + Số tiền điều chỉnh
+    (nếu có) — về lý thuyết bằng NMV − Thuế.
+  - Còn lại = NMV − Thuế − Số tiền đã thu (khoảng chênh giữa lý thuyết và
+    tiền thực đã về, ví dụ tiền Shopee giữ lại chưa thanh toán).
+  - Cả 4 chỉ số này (Tổng tiền đã thanh toán, Số tiền điều chỉnh, Số tiền
+    đã thu, Còn lại) **chỉ mang tính thông tin/đối chiếu** — không đưa
+    vào `nmv_row_expr`/`loi_nhuan_gop_row_expr`, giống Thuế ở mục 25.
+  - `app/cashflow_to_parquet.py`: thêm field `totalPaidAmount` ("Tổng
+    tiền đã thanh toán") — giữ nguyên giá trị, không đảo dấu (khác
+    thue/phiAff vốn lưu âm trong file gốc).
+  - `app/query_engine.py`: **Điều chỉnh doanh thu lần đầu tiên được join
+    vào `orders_working`** (`_adjustment_agg_join` mới, JOIN theo "Mã đơn
+    hàng liên quan" = orderId, GROUP BY để cộng dồn nhiều lần điều chỉnh
+    trên cùng 1 đơn) — trước đây file này chỉ là kho lưu trữ độc lập,
+    không tham gia tính toán Dashboard. Cả 2 giá trị mới đều nhân theo tỷ
+    lệ `orderPaidRatio`/combo giống `phiAff`/`thue`.
+  - `app/routers/dashboard.py`: thêm `_all_ready_adjustments_parquet_paths()`
+    (cùng cơ chế best-effort []-on-error như Cashflow/Combo/Master
+    File/Kênh AFF), truyền `adjustment_source` xuyên suốt 4 endpoint
+    summary/rows/rows-grouped/export qua `_all_dashboard_sources` dùng
+    chung.
+  - Frontend: 4 thẻ KPI mới (Tổng tiền đã thanh toán, Số tiền điều chỉnh,
+    Số tiền đã thu, Còn lại) sau Lợi nhuận gộp ở Tổng quan, cột tương ứng
+    ở bảng Dữ liệu chi tiết (cả 2 chế độ) và Xuất Excel.
+  - Đã verify với file thật `T8-6.9.xlsx` (Dòng tiền) + file điều chỉnh
+    tự tạo cho cùng 1 đơn: công thức Số tiền đã thu/Còn lại tính đúng,
+    NMV/Lợi nhuận gộp không đổi.
+
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 
 - **Đa kênh khác (Lazada,...)**: áp dụng cách làm tương tự mục 10/11 khi có
@@ -552,7 +585,7 @@ hơn:**
 
 Mỗi lần sửa `frontend/js/app.js` hoặc `frontend/index.html`, nhớ tăng số
 `?v=N` ở 2 dòng `<script src="js/...">` cuối `index.html` — nếu không trình
-duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=42**.
+duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=43**.
 
 ## 9. Tối ưu hóa code (reuse/simplification/efficiency)
 

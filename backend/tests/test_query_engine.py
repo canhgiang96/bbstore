@@ -642,6 +642,81 @@ def test_cashflow_thue_is_zero_when_no_cashflow_report_has_it(parquet_path_with_
         os.remove(cashflow_path)
 
 
+def test_so_tien_da_thu_and_con_lai_computed_from_cashflow_and_adjustment(
+    parquet_path_with_discounts,
+):
+    # User confirmed 2026-09-09: Số tiền đã thu = Tổng tiền đã thanh toán
+    # (Cashflow) + Số tiền điều chỉnh (Điều chỉnh doanh thu, kept as-is —
+    # can be negative), and Còn lại = NMV - Thuế - Số tiền đã thu. Neither
+    # feeds back into NMV/Lợi nhuận gộp themselves (same informational
+    # treatment as Thuế).
+    cashflow_path = _write_cashflow_parquet([
+        {"orderId": "D1", "phiAff": 0.0, "thue": 5000.0, "tongTienDaThanhToan": 300000.0},
+    ])
+    adjustment_path = _write_raw_parquet([{"relatedOrderId": "D1", "amount": -20000.0}])
+    try:
+        baseline = run_summary_query(parquet_path_with_discounts)
+        result = run_summary_query(
+            parquet_path_with_discounts, cashflow_source=[cashflow_path], adjustment_source=[adjustment_path],
+        )
+        kpis = result["kpis"]
+
+        assert kpis["tongTienDaThanhToan"] == 300000
+        assert kpis["soTienDieuChinh"] == -20000
+        assert kpis["soTienDaThu"] == 300000 - 20000
+        assert kpis["conLai"] == kpis["nmv"] - kpis["thue"] - kpis["soTienDaThu"]
+        assert kpis["nmv"] == baseline["kpis"]["nmv"]
+        assert kpis["loiNhuanGop"] == baseline["kpis"]["loiNhuanGop"]
+
+        # Prorated across the order's two lines the same way phiAff/thue are.
+        rows = run_rows_query(
+            parquet_path_with_discounts, page_size=10,
+            cashflow_source=[cashflow_path], adjustment_source=[adjustment_path],
+        )
+        by_sku = {r["skuVariant"]: r for r in rows["rows"]}
+        assert by_sku["A100-1"]["soTienDieuChinh"] == -20000 * 0.4
+        assert by_sku["B200-1"]["soTienDieuChinh"] == -20000 * 0.6
+    finally:
+        os.remove(cashflow_path)
+        os.remove(adjustment_path)
+
+
+def test_so_tien_dieu_chinh_is_zero_when_no_adjustment_source(parquet_path_with_discounts):
+    result = run_summary_query(parquet_path_with_discounts)
+    assert result["kpis"]["soTienDieuChinh"] == 0
+    assert result["kpis"]["soTienDaThu"] == 0
+
+
+def test_adjustment_multiple_entries_for_same_order_are_summed(parquet_path_with_discounts):
+    # A real order can have several separate adjustment events over time
+    # (e.g. a return followed later by a re-delivery correction) — must be
+    # summed via the join's GROUP BY "relatedOrderId", not just one taken.
+    adjustment_path = _write_raw_parquet([
+        {"relatedOrderId": "D1", "amount": -20000.0},
+        {"relatedOrderId": "D1", "amount": 5000.0},
+    ])
+    try:
+        result = run_summary_query(parquet_path_with_discounts, adjustment_source=[adjustment_path])
+        assert result["kpis"]["soTienDieuChinh"] == -15000
+    finally:
+        os.remove(adjustment_path)
+
+
+def test_adjustment_rows_with_blank_related_order_id_are_excluded_from_join(parquet_path_with_discounts):
+    # adjustments_to_parquet.py can keep a row identified only by
+    # "Mã giao dịch" with no "Mã đơn hàng liên quan" at all — must not join
+    # against some order with an accidentally-blank orderId.
+    adjustment_path = _write_raw_parquet([
+        {"relatedOrderId": "", "amount": -99999.0},
+        {"relatedOrderId": "D1", "amount": 1000.0},
+    ])
+    try:
+        result = run_summary_query(parquet_path_with_discounts, adjustment_source=[adjustment_path])
+        assert result["kpis"]["soTienDieuChinh"] == 1000
+    finally:
+        os.remove(adjustment_path)
+
+
 def test_cashflow_multiple_rows_for_same_order_are_summed(parquet_path_with_discounts):
     # A single order can appear on more than one row within the SAME
     # Cashflow Report file (TikTok's "income" export does this for a
