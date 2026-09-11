@@ -637,6 +637,25 @@
     });
   }
 
+  // Detail-table "Số dòng/trang" — user confirmed 2026-09-11 the default
+  // 15 meant paging through 1000+ pages for a large result set; offering a
+  // few larger presets (not free-text) keeps a response bounded without
+  // needing a backend page_size cap. Persisted like visibleCols/colOrder.
+  const DETAIL_PAGE_SIZE_OPTIONS = [15, 50, 100, 200, 500];
+  const DETAIL_PAGE_SIZE_KEY = "bbstore_detail_page_size";
+
+  function loadDetailPageSize() {
+    try {
+      const n = Number(localStorage.getItem(DETAIL_PAGE_SIZE_KEY));
+      if (DETAIL_PAGE_SIZE_OPTIONS.includes(n)) return n;
+    } catch (e) { /* storage unavailable */ }
+    return 15;
+  }
+
+  function saveDetailPageSize(n) {
+    try { localStorage.setItem(DETAIL_PAGE_SIZE_KEY, String(n)); } catch (e) { /* storage unavailable */ }
+  }
+
   /* ================= Dashboard (aggregates every ready Report — see
      /api/dashboard/summary + /rows; the date/category/status filters below
      are how the user narrows the view, not a per-Report picker) ================= */
@@ -652,7 +671,7 @@
     detailSort: "date",
     detailSortDir: "asc",
     detailPage: 1,
-    detailPageSize: 15,
+    detailPageSize: loadDetailPageSize(),
     visibleCols: null, // Set, lazily loaded from localStorage — TABLE_COLS isn't defined yet at this point in the file
     colOrder: null, // Array of TABLE_COLS keys in display order — same lazy-load rationale as visibleCols
     // Nested "Group theo" tree state — a node's path is the ordered chain of
@@ -1155,6 +1174,14 @@
       if (dash.detailPage > 1) { dash.detailPage--; clearGroupState(); fetchAndRenderDetailTable(); }
     };
     el("detailNext").onclick = () => { dash.detailPage++; clearGroupState(); fetchAndRenderDetailTable(); };
+    el("detailPageSize").value = String(dash.detailPageSize);
+    el("detailPageSize").onchange = e => {
+      dash.detailPageSize = Number(e.target.value);
+      saveDetailPageSize(dash.detailPageSize);
+      dash.detailPage = 1;
+      clearGroupState();
+      fetchAndRenderDetailTable();
+    };
     el("btnExportExcel").onclick = () => exportExcel();
     el("btnExportOverviewExcel").onclick = () => exportOverviewExcel();
     wireSubtabs();

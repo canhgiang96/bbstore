@@ -279,6 +279,8 @@ thead th {
 tbody td { padding: 8px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 tbody tr:hover { background: var(--primary-soft); }
 .table-footer { display: flex; align-items: center; justify-content: center; gap: 16px; margin-top: 12px; }
+.page-size-picker { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--text-muted); }
+.page-size-picker select { font: inherit; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; background: var(--surface); }
 
 /* Dashboard sub-tabs (Tổng quan / Dữ liệu chi tiết) — reuses .tabs/.tab-btn */
 .subtabs { margin-bottom: 20px; }

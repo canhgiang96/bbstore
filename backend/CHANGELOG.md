@@ -591,6 +591,17 @@ hơn:**
     đã lưu của người dùng sẽ tự động xếp ở cuối, không bị mất khỏi bảng.
   - `frontend/css/style.css`: thêm style tay cầm kéo (`.col-drag-handle`).
 
+## 28. Chọn số dòng/trang ở tab Dữ liệu chi tiết
+
+- **User báo 2026-09-11**: mặc định 15 dòng/trang khiến bảng 16.424 dòng
+  phải lật 1095 trang mới hết, muốn xem danh sách dài hơn mỗi trang.
+  - Thêm dropdown "Số dòng/trang" (15/50/100/200/500) cạnh nút Trước/Sau ở
+    tab Dữ liệu chi tiết — chọn preset thay vì nhập tự do để giới hạn kích
+    thước response mà không cần thêm cap ở backend (API `/rows`/`/rows/
+    grouped` vốn không giới hạn `pageSize`).
+  - Lựa chọn được lưu localStorage (`bbstore_detail_page_size`), giữ
+    nguyên khi tải lại trang, tương tự cách lưu Cột hiển thị/thứ tự cột.
+
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 
 - **Đa kênh khác (Lazada,...)**: áp dụng cách làm tương tự mục 10/11 khi có
@@ -600,7 +611,7 @@ hơn:**
 
 Mỗi lần sửa `frontend/js/app.js` hoặc `frontend/index.html`, nhớ tăng số
 `?v=N` ở 2 dòng `<script src="js/...">` cuối `index.html` — nếu không trình
-duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=44**.
+duyệt có thể dùng bản JS cũ trong cache. Phiên bản hiện tại: **v=45**.
 
 ## 9. Tối ưu hóa code (reuse/simplification/efficiency)
 
