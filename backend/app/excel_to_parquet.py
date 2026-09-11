@@ -202,7 +202,6 @@ def build_dashboard_rows(raw_rows: list[dict], mapping: dict, sales_channel_name
     order_fallback_weight_totals = {} if paid_col else _order_fallback_weight_totals(raw_rows, mapping)
     order_paid_kept_totals = _order_paid_kept_totals(raw_rows, mapping) if paid_col else {}
     order_kept_qty_totals = {} if paid_col else _order_kept_qty_totals(raw_rows, mapping)
-    seen_order_ids: set = set()
     out = []
 
     for row in raw_rows:
@@ -272,10 +271,7 @@ def build_dashboard_rows(raw_rows: list[dict], mapping: dict, sales_channel_name
         row_channel = normalize_combined_sales_channel(row.get(mapping["channelRaw"])) if mapping.get("channelRaw") else ""
         row_apply_piship = channel_has_piship(row_channel) if row_channel else apply_piship
 
-        order_key = row.get(order_col)
-        is_first_line_of_order = order_key not in seen_order_ids
-        seen_order_ids.add(order_key)
-        piship_fee = compute_piship_fee(is_first_line_of_order, date) if row_apply_piship else 0.0
+        piship_fee = compute_piship_fee(order_paid_ratio, date) if row_apply_piship else 0.0
 
         out.append({
             "date": date,

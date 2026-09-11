@@ -602,6 +602,27 @@ hơn:**
   - Lựa chọn được lưu localStorage (`bbstore_detail_page_size`), giữ
     nguyên khi tải lại trang, tương tự cách lưu Cột hiển thị/thứ tự cột.
 
+## 29. Fix Phí Piship: chia theo tỷ lệ Số tiền người mua thanh toán thay vì gán hết vào 1 dòng
+
+- **User yêu cầu 2026-09-11** (sau khi tự kiểm tra 2 đơn hàng thật, đơn
+  260701FNKH79AR và 260701FPT2BH4U): muốn "Còn lại" (NMV − Thuế − Số tiền
+  đã thu) hiện đúng = 0 ngay trên TỪNG dòng của 1 đơn nhiều dòng SKU,
+  không cần cộng các dòng lại mới triệt tiêu về 0.
+  - Nguyên nhân: Phí sàn/Phí AFF/Thuế/Tổng tiền đã thanh toán đều đã chia
+    theo tỷ lệ `orderPaidRatio` (theo Số tiền người mua thanh toán từng
+    dòng) — riêng Phí Piship trước đây gán TOÀN BỘ vào dòng đầu tiên của
+    đơn (dòng khác = 0), nên "Còn lại" chỉ triệt tiêu đúng khi cộng hết
+    các dòng của 1 đơn, không đúng ngay trên từng dòng riêng lẻ.
+  - Đã sửa `compute_piship_fee()` (`app/derive.py`) nhận `order_paid_ratio`
+    thay vì `is_first_line_of_order` — Phí Piship giờ chia theo đúng tỷ lệ
+    đó, giống Phí sàn. Tổng theo đơn vẫn giữ nguyên 1.620/2.700 (không đổi),
+    chỉ đổi cách chia giữa các dòng.
+  - Đã verify bằng 2 đơn hàng thật (`Order.all...xlsx` + `T7.xlsx`,
+    260701FNKH79AR 1 dòng và 260701FPT2BH4U 2 dòng): "Còn lại" = 0 chính
+    xác trên từng dòng sau khi sửa.
+  - **Lưu ý**: các Report Đơn hàng đã convert trước khi sửa cần bấm
+    "Chuyển đổi lại" để áp dụng cách chia Piship mới.
+
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 
 - **Đa kênh khác (Lazada,...)**: áp dụng cách làm tương tự mục 10/11 khi có

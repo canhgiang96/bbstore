@@ -171,11 +171,21 @@ def compute_platform_fee(fixed_fee: float, service_fee: float, transaction_fee: 
     return (fixed_fee + service_fee + transaction_fee) * order_paid_ratio
 
 
-def compute_piship_fee(is_first_line_of_order: bool, order_date=None) -> float:
+def compute_piship_fee(order_paid_ratio: float, order_date=None) -> float:
     """Phí Piship là một khoản phí cố định cho mỗi đơn hàng (không nhân
-    theo số dòng sản phẩm) — assigned to just the first surviving line of
-    each order so summing rows gives the correct per-order total instead
-    of double-counting it once per line.
+    theo số dòng sản phẩm) — prorated by order_paid_ratio across an
+    order's lines, the same basis Phí sàn/Phí AFF/Thuế/Tổng tiền đã thanh
+    toán already use, so summing rows gives the correct per-order total
+    instead of double-counting it once per line.
+
+    Previously assigned entirely to just the first line of each order
+    instead — mathematically also summed to the right per-order total, but
+    made "Còn lại" (NMV - Thuế - Số tiền đã thu) net to 0 only when
+    summed across an order's lines, never on a single multi-line row by
+    itself (every other deduction IS already prorated the same way "Số
+    tiền đã thu" is). Changed 2026-09-11 per the user, who wants "Còn lại"
+    readable as 0 directly on each row, not just after adding several
+    rows together.
 
     The per-order rate depends on the order's own date: 1.620 before
     23/05/2026, 2.700 from that date onward (see PISHIP_RATE_CHANGE_DATE).
@@ -183,12 +193,13 @@ def compute_piship_fee(is_first_line_of_order: bool, order_date=None) -> float:
     old 1.620 rate rather than guessing — same "don't silently assume the
     newer behavior" caution as quantity_known/status_known elsewhere.
     """
-    if not is_first_line_of_order:
-        return 0.0
     order_date_only = order_date.date() if hasattr(order_date, "date") else order_date
-    if order_date_only is not None and order_date_only >= PISHIP_RATE_CHANGE_DATE:
-        return PISHIP_FEE_PER_ORDER_RAISED
-    return PISHIP_FEE_PER_ORDER
+    flat_rate = (
+        PISHIP_FEE_PER_ORDER_RAISED
+        if order_date_only is not None and order_date_only >= PISHIP_RATE_CHANGE_DATE
+        else PISHIP_FEE_PER_ORDER
+    )
+    return flat_rate * order_paid_ratio
 
 
 # Piship is Shopee's own delivery-partner fee scheme — it doesn't apply to

@@ -326,7 +326,7 @@ def make_fee_xlsx_bytes():
     return buf
 
 
-def test_platform_fee_prorated_and_piship_assigned_to_first_line_only():
+def test_platform_fee_and_piship_prorated_by_paid_amount():
     parquet_bytes, row_count, mapping = excel_to_parquet(make_fee_xlsx_bytes())
     assert row_count == 3
     assert mapping["fixedFee"] == "Phí cố định"
@@ -343,10 +343,15 @@ def test_platform_fee_prorated_and_piship_assigned_to_first_line_only():
     assert line2["platformFee"] == 3500 * 0.6
     assert single["platformFee"] == 1000  # 500+300+200, ratio 100%
 
-    # Piship (1.620/order, flat) goes to only the first surviving line.
-    assert line1["piship"] == 1620
-    assert line2["piship"] == 0
-    assert single["piship"] == 1620
+    # Piship (1.620/order) is prorated the SAME 40%/60% way — confirmed
+    # with the user 2026-09-11, so "Còn lại" (NMV - Thuế - Số tiền đã thu)
+    # reads as 0 directly on each row, not just when an order's rows are
+    # added together (every other deduction here already prorates the
+    # same way "Số tiền đã thu" does; Piship used to be the one exception,
+    # assigned entirely to just the first line).
+    assert line1["piship"] == 1620 * 0.4
+    assert line2["piship"] == 1620 * 0.6
+    assert single["piship"] == 1620  # ratio 100%
 
 
 def test_piship_gated_by_sales_channel():
@@ -357,7 +362,7 @@ def test_piship_gated_by_sales_channel():
         parquet_bytes, _, _ = excel_to_parquet(make_fee_xlsx_bytes(), sales_channel_name=channel)
         df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
         first_line_piship = df[(df["orderId"] == "F1") & (df["skuVariant"] == "A100-1")].iloc[0]["piship"]
-        assert first_line_piship == (1620 if expect_piship else 0), f"channel={channel!r}"
+        assert first_line_piship == (1620 * 0.4 if expect_piship else 0), f"channel={channel!r}"
 
 
 def test_piship_rate_changes_on_23_05_2026():

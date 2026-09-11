@@ -172,34 +172,44 @@ def test_compute_platform_fee_not_scaled_by_returns():
     assert fee_full_order == 3500
 
 
-def test_compute_piship_fee_first_line_gets_full_amount():
-    assert compute_piship_fee(is_first_line_of_order=True) == 1620
+def test_compute_piship_fee_full_ratio_gets_full_amount():
+    assert compute_piship_fee(order_paid_ratio=1.0) == 1620
 
 
-def test_compute_piship_fee_other_lines_get_zero():
-    assert compute_piship_fee(is_first_line_of_order=False) == 0
+def test_compute_piship_fee_prorated_by_order_paid_ratio():
+    # Confirmed with the user 2026-09-11: prorated across an order's lines
+    # the same way Phí sàn/Phí AFF/Thuế/Tổng tiền đã thanh toán already
+    # are (not "flat amount on just the first line") — so "Còn lại" nets
+    # to 0 on each row directly, without needing several rows added
+    # together first.
+    assert compute_piship_fee(order_paid_ratio=0.4) == 1620 * 0.4
+    assert compute_piship_fee(order_paid_ratio=0.6) == 1620 * 0.6
+
+
+def test_compute_piship_fee_zero_ratio_gets_zero():
+    assert compute_piship_fee(order_paid_ratio=0.0) == 0
 
 
 # Confirmed with the user 2026-09-03: Shopee raised Piship from 1.620 to
 # 2.700 starting exactly 23/05/2026, compared against the order's own date.
 def test_compute_piship_fee_uses_old_rate_before_change_date():
-    assert compute_piship_fee(True, datetime(2026, 5, 22)) == 1620
+    assert compute_piship_fee(1.0, datetime(2026, 5, 22)) == 1620
 
 
 def test_compute_piship_fee_uses_new_rate_on_change_date():
-    assert compute_piship_fee(True, datetime(2026, 5, 23)) == 2700
+    assert compute_piship_fee(1.0, datetime(2026, 5, 23)) == 2700
 
 
 def test_compute_piship_fee_uses_new_rate_after_change_date():
-    assert compute_piship_fee(True, datetime(2026, 9, 3)) == 2700
+    assert compute_piship_fee(1.0, datetime(2026, 9, 3)) == 2700
 
 
 def test_compute_piship_fee_defaults_to_old_rate_when_date_unknown():
     # No date column mapped/parseable — don't silently assume the newer
     # rate, matching quantity_known/status_known's caution elsewhere.
-    assert compute_piship_fee(True, None) == 1620
-    assert compute_piship_fee(True) == 1620
+    assert compute_piship_fee(1.0, None) == 1620
+    assert compute_piship_fee(1.0) == 1620
 
 
 def test_compute_piship_fee_accepts_plain_date_not_just_datetime():
-    assert compute_piship_fee(True, date(2026, 5, 23)) == 2700
+    assert compute_piship_fee(1.0, date(2026, 5, 23)) == 2700

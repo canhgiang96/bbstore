@@ -681,6 +681,67 @@ def test_so_tien_da_thu_and_con_lai_computed_from_cashflow_and_adjustment(
         os.remove(adjustment_path)
 
 
+def test_con_lai_reconciles_to_zero_on_every_row_of_a_multi_line_order():
+    # User confirmed 2026-09-11 (after checking real orders): "Còn lại"
+    # must read as 0 directly on EACH row of a multi-line order, not just
+    # after adding the order's rows together — this only holds if every
+    # deduction in NMV (Piship included) prorates by the SAME
+    # order_paid_ratio "Số tiền đã thu" does. Real Shopee data guarantees
+    # "Tổng số tiền Người mua thanh toán" (buyerPaidAmount) per line
+    # already equals that line's own originalPrice - discount (no
+    # shopVoucher here), so this fixture mirrors that real-world identity
+    # instead of using arbitrary unrelated numbers.
+    headers = [
+        "Mã đơn hàng", "Ngày đặt hàng", "Trạng Thái Đơn Hàng", "Lý do hủy",
+        "SKU phân loại hàng", "Tên sản phẩm", "Tên phân loại hàng",
+        "Giá gốc", "Số lượng", "Số lượng sản phẩm được hoàn trả",
+        "Người bán trợ giá", "Mã giảm giá của Shop", "Tổng số tiền Người mua thanh toán",
+    ]
+    rows = [
+        ["R1", "2026-07-01 00:01", "Hoàn thành", "", "A100-1", "SP A", "Áo", 100000, 1, 0, 20000, 0, 80000],
+        ["R1", "2026-07-01 00:01", "Hoàn thành", "", "B200-1", "SP B", "Quần", 150000, 1, 0, 30000, 0, 120000],
+    ]
+    wb = Workbook()
+    ws = wb.active
+    ws.append(headers)
+    for r in rows:
+        ws.append(r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    parquet_bytes, row_count, _ = excel_to_parquet(buf)
+    assert row_count == 2
+    fd, path = tempfile.mkstemp(suffix=".parquet")
+    with os.fdopen(fd, "wb") as f:
+        f.write(parquet_bytes)
+
+    try:
+        baseline = run_summary_query(path)
+        nmv_total = baseline["kpis"]["nmv"]
+        assert nmv_total == 197300  # 200000 doanhThuThuan - 2700 piship
+
+        # "Tổng tiền đã thanh toán" set to exactly NMV (no Thuế, no điều
+        # chỉnh) so "Còn lại" should net to 0 both in aggregate and per row.
+        cashflow_path = _write_cashflow_parquet([
+            {"orderId": "R1", "phiAff": 0.0, "tongTienDaThanhToan": float(nmv_total)},
+        ])
+        try:
+            result = run_summary_query(path, cashflow_source=[cashflow_path])
+            assert result["kpis"]["conLai"] == 0
+
+            rows_result = run_rows_query(path, page_size=10, cashflow_source=[cashflow_path])
+            by_sku = {r["skuVariant"]: r for r in rows_result["rows"]}
+            assert by_sku["A100-1"]["conLai"] == 0
+            assert by_sku["B200-1"]["conLai"] == 0
+            # Piship itself is prorated 40%/60%, not flat-on-first-line.
+            assert by_sku["A100-1"]["piship"] == 2700 * 0.4
+            assert by_sku["B200-1"]["piship"] == 2700 * 0.6
+        finally:
+            os.remove(cashflow_path)
+    finally:
+        os.remove(path)
+
+
 def test_so_tien_dieu_chinh_is_zero_when_no_adjustment_source(parquet_path_with_discounts):
     result = run_summary_query(parquet_path_with_discounts)
     assert result["kpis"]["soTienDieuChinh"] == 0
@@ -807,16 +868,19 @@ def test_rows_combo_explodes_matching_sku_into_scaled_children(parquet_path_with
     assert by_sku["X1-1"]["quantity"] == by_sku["X2-1"]["quantity"] == 2
     assert by_sku["X1-1"]["soLuongThuc"] == by_sku["X2-1"]["soLuongThuc"] == 2
 
-    # Piship: A100-1 was D1's first line (1.620) -> all of it goes to the
-    # slot-1 child (X1-1); the slot-2 child (X2-1) gets 0, not scaled by ratio.
-    assert by_sku["X1-1"]["piship"] == 1620
+    # Piship: A100-1's persisted share is 1.620 * order_paid_ratio (0.4 for
+    # this line) -> that whole persisted value goes to the slot-1 child
+    # (X1-1); the slot-2 child (X2-1) gets 0 — gated by combo slot, but
+    # NOT further scaled by the combo explosion's own ratio_expr.
+    assert by_sku["X1-1"]["piship"] == 1620 * 0.4
     assert by_sku["X2-1"]["piship"] == 0
 
-    # B200-1 has no combo match -> passes through completely unchanged.
+    # B200-1 has no combo match -> passes through completely unchanged. It's
+    # D1's second line (ratio 0.6), so it carries its own Piship share too.
     assert by_sku["B200-1"]["doanhSo"] == 150000
     assert by_sku["B200-1"]["discount"] == 1500
     assert by_sku["B200-1"]["voucher"] == 6000
-    assert by_sku["B200-1"]["piship"] == 0
+    assert by_sku["B200-1"]["piship"] == 1620 * 0.6
 
     # "sku" (parent code) is re-derived from the new skuVariant.
     assert by_sku["X1-1"]["sku"] == "X1"
