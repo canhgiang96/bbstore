@@ -623,6 +623,32 @@ hơn:**
   - **Lưu ý**: các Report Đơn hàng đã convert trước khi sửa cần bấm
     "Chuyển đổi lại" để áp dụng cách chia Piship mới.
 
+## 30. NMV/Còn lại ở Dữ liệu chi tiết: đơn Hủy/Hoàn chỉ còn trừ Piship
+
+- **User yêu cầu 2026-09-11** (sau khi cùng kiểm tra đơn thật
+  260701FNATRM9E, 1 đơn hoàn toàn bộ): Shopee đã tự điều chỉnh lại Doanh
+  thu thuần/Phí sàn/Phí AFF/Thuế qua file Điều chỉnh doanh thu cho các
+  đơn Hủy chưa XK/Hủy sau XK/Hoàn hàng (chỉ riêng Phí Piship là KHÔNG
+  được hoàn) — nên cột NMV/Còn lại ở tab Dữ liệu chi tiết trừ thêm Phí
+  sàn/Phí AFF/Thuế cho các đơn này là tính trùng (khoản đó Shopee đã tự
+  hoàn qua file điều chỉnh rồi).
+  - Với đơn Hủy chưa XK/Hủy sau XK/Hoàn hàng: NMV giờ = Doanh thu thuần
+    (= 0, các đơn này không tính GMV) − Phí Piship (Hủy chưa XK thì
+    Piship cũng = 0 sẵn, giữ nguyên như trước). Còn lại = NMV − Số tiền
+    đã thu (bỏ Thuế ra khỏi công thức Còn lại cho các đơn này).
+  - Đơn Hoàn 1 phần/Hoàn thành/Đang giao: giữ nguyên công thức cũ, không
+    đổi gì.
+  - Cột Phí sàn/Phí Piship/Phí AFF/Thuế bản thân vẫn hiển thị số liệu
+    thô (raw) như cũ, không đổi — chỉ công thức NMV/Còn lại bên trong là
+    có xét trạng thái đơn.
+  - **Chỉ áp dụng cho cột NMV/Còn lại ở Dữ liệu chi tiết** — user xác
+    nhận giữ nguyên thẻ KPI NMV/Lợi nhuận gộp bên Tổng quan như cũ
+    (không status-scope), giống tiền lệ Giảm giá/Voucher trước đây —
+    nhưng lần này theo CHIỀU NGƯỢC LẠI (Chi tiết bị scope chặt hơn Tổng
+    quan, thay vì Tổng quan chặt hơn Chi tiết như Giảm giá/Voucher).
+  - Đã verify khớp chính xác với đơn thật: NMV = −2.700 (đúng bằng
+    Piship), Còn lại = 33.546 (đúng bằng Phí AFF của đơn đó).
+
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 
 - **Đa kênh khác (Lazada,...)**: áp dụng cách làm tương tự mục 10/11 khi có

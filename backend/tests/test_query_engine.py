@@ -308,6 +308,65 @@ def test_summary_piship_excludes_huy_chua_xk(parquet_path):
     assert by_order["O1"]["piship"] == 1620
 
 
+def test_detail_table_nmv_and_con_lai_only_deduct_piship_for_non_gmv_statuses(parquet_path):
+    # User confirmed 2026-09-11 against a real fully-returned order
+    # (260701FNATRM9E): Shopee's "Điều chỉnh doanh thu" already reverses
+    # Phí sàn/Phí AFF/Thuế out-of-band for Hủy chưa XK/Hủy sau XK/Hoàn
+    # hàng orders (everything except Piship, which alone survives a
+    # return) — so NMV/Còn lại in the Detail table must NOT deduct
+    # platformFee/phiAff/thue for those 3 statuses, or they'd be double-
+    # counting a reversal that already happened elsewhere. Hoàn 1 phần/
+    # Hoàn thành/Đang giao (real GMV-contributing statuses) are unaffected
+    # — same platformFee_col/phiAff/thue as always.
+    #
+    # parquet_path's O1/O2/O3/O5 cover Hủy sau XK/Hủy chưa XK/Hoàn hàng/
+    # Hoàn thành respectively; a TikTok-style cashflow_source (with its own
+    # "platformFee" column) gives every one of them a nonzero Phí sàn/Phí
+    # AFF to prove the scoping, not just Piship.
+    cashflow_path = _write_cashflow_parquet([
+        {"orderId": "O1", "phiAff": 2000.0, "platformFee": 5000.0},
+        {"orderId": "O3", "phiAff": 2000.0, "platformFee": 5000.0},
+        {"orderId": "O5", "phiAff": 2000.0, "platformFee": 5000.0},
+    ])
+    try:
+        result = run_rows_query(parquet_path, cashflow_source=[cashflow_path], page_size=10)
+        by_order = {r["orderId"]: r for r in result["rows"]}
+
+        # Hủy sau XK (O1) and Hoàn hàng (O3): NMV = -Piship only, even
+        # though platformFee/phiAff are nonzero on the raw column.
+        assert by_order["O1"]["trangThai"] == "Hủy sau XK"
+        assert by_order["O1"]["platformFee"] == 5000  # raw column stays unconditional
+        assert by_order["O1"]["phiAff"] == 2000  # raw column stays unconditional
+        assert by_order["O1"]["nmv"] == -1620
+        assert by_order["O1"]["conLai"] == -1620
+
+        assert by_order["O3"]["trangThai"] == "Hoàn hàng"
+        assert by_order["O3"]["nmv"] == -1620
+        assert by_order["O3"]["conLai"] == -1620
+
+        # Hủy chưa XK (O2): Piship already excludes this status too -> NMV = 0.
+        assert by_order["O2"]["trangThai"] == "Hủy chưa XK"
+        assert by_order["O2"]["nmv"] == 0
+        assert by_order["O2"]["conLai"] == 0
+
+        # Hoàn thành (O5): unaffected — full platformFee/piship/phiAff deduction.
+        assert by_order["O5"]["trangThai"] == "Hoàn thành"
+        assert by_order["O5"]["nmv"] == 200000 - 5000 - 1620 - 2000
+
+        # The Tổng quan aggregate KPI is explicitly NOT scoped this way
+        # (user confirmed 2026-09-11: keep it as the old unconditional
+        # formula) — so it does NOT reconcile with the Detail sum anymore
+        # once a void-status order has a nonzero Phí sàn/Phí AFF, same
+        # "intentionally allowed to disagree" precedent as Giảm giá/
+        # Voucher (see test_detail_table_discount_stays_unscoped_by_status_
+        # unlike_overview_kpi above).
+        summary = run_summary_query(parquet_path, cashflow_source=[cashflow_path])
+        detail_nmv_sum = sum(r["nmv"] for r in result["rows"])
+        assert summary["kpis"]["nmv"] != detail_nmv_sum
+    finally:
+        os.remove(cashflow_path)
+
+
 DISCOUNT_HEADERS = HEADERS + ["Người bán trợ giá", "Mã giảm giá của Shop", "Số tiền người mua thanh toán"]
 
 DISCOUNT_ROWS = [

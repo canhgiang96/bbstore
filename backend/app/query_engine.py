@@ -537,17 +537,26 @@ def _build_orders_working(
     # chi tiết intentionally shows the raw, unscoped source data (every
     # row's own discount/voucher/giá vốn regardless of trạng thái) — the
     # two tabs are meant to disagree whenever a cancelled/returned order
-    # carries a nonzero discount. Phí sàn/Piship/Phí AFF are NOT
-    # status-scoped either way (piship already excludes "Hủy chưa XK" via
-    # its own CASE above), matching the KPIs.
+    # carries a nonzero discount. The persisted platformFee/piship/phiAff/
+    # thue columns themselves stay unconditional/raw (same reasoning) —
+    # but nmv_row_expr/con_lai_row_expr below now DO scope their internal
+    # use of platformFee/phiAff/thue by trạng thái (see scoped_platform_fee_
+    # row_expr/scoped_phi_aff_row_expr/scoped_thue_row_expr), confirmed
+    # with the user 2026-09-11 against 2 real returned orders
+    # (260701FNATRM9E full-return: NMV must be exactly -Piship, with
+    # "Còn lại" reconciling to exactly that order's Phí AFF once Thuế is
+    # also dropped from Còn lại for the same non-GMV statuses). Piship
+    # itself already excludes "Hủy chưa XK" via its own CASE below, so
+    # "Hủy chưa XK" orders correctly end up with NMV = 0 (no Piship
+    # either) without needing a separate case for it.
     piship_row_expr = (
         f"CASE WHEN ({slot_expr} IS NULL OR {slot_expr} = 1) AND o.\"trangThai\" != 'Hủy chưa XK' "
         f"THEN {piship_col} ELSE 0 END"
     )
     phi_aff_row_expr = f"(({aff_expr}) * {ratio_expr})"
-    # Informational only — confirmed with the user 2026-09-08 to NOT feed
-    # into nmv_row_expr/loi_nhuan_gop_row_expr below, unlike platformFee/
-    # piship/phiAff.
+    # Informational only — confirmed with the user 2026-09-08 to never feed
+    # into loi_nhuan_gop_row_expr's Giá vốn deduction, unlike platformFee/
+    # piship/phiAff. It DOES feed into con_lai_row_expr below (scoped).
     thue_row_expr = f"(({cashflow_thue_expr}) * {ratio_expr})"
     gmv_row_expr = (
         f'CASE WHEN o."trangThai" IN {GMV_STATUSES_SQL} '
@@ -560,9 +569,22 @@ def _build_orders_working(
         f'CASE WHEN o."trangThai" IN {GMV_STATUSES_SQL} THEN {voucher_col} * {ratio_expr} ELSE 0 END'
     )
     doanh_thu_thuan_row_expr = f"({gmv_row_expr} - {scoped_discount_row_expr} - {scoped_voucher_row_expr})"
+    # Phí sàn/Phí AFF (and, in con_lai_row_expr below, Thuế) only reduce
+    # NMV/Còn lại for orders that actually count towards GMV (Hoàn thành/
+    # Đang giao/Hoàn 1 phần) — for Hủy chưa XK/Hủy sau XK/Hoàn hàng,
+    # Shopee's own "Điều chỉnh doanh thu" already reverses those charges
+    # out-of-band (everything except Piship, which alone survives a
+    # return), so subtracting them here too would double-count the
+    # reversal. Confirmed 2026-09-11 against a real fully-returned order.
+    scoped_platform_fee_row_expr = (
+        f'CASE WHEN o."trangThai" IN {GMV_STATUSES_SQL} THEN {combined_platform_fee_col} * {ratio_expr} ELSE 0 END'
+    )
+    scoped_phi_aff_row_expr = (
+        f'CASE WHEN o."trangThai" IN {GMV_STATUSES_SQL} THEN {phi_aff_row_expr} ELSE 0 END'
+    )
     nmv_row_expr = (
-        f"({doanh_thu_thuan_row_expr} - {combined_platform_fee_col} * {ratio_expr} "
-        f"- {piship_row_expr} - {phi_aff_row_expr})"
+        f"({doanh_thu_thuan_row_expr} - {scoped_platform_fee_row_expr} "
+        f"- {piship_row_expr} - {scoped_phi_aff_row_expr})"
     )
     scoped_gia_von_row_expr = (
         f'CASE WHEN o."trangThai" IN {GMV_STATUSES_SQL} THEN o."soLuongThuc" * {gia_von_expr} ELSE 0 END'
@@ -573,11 +595,15 @@ def _build_orders_working(
     # (Cashflow) + Số tiền điều chỉnh (Điều chỉnh doanh thu, kept as-is —
     # can be negative), and theo lý thuyết should equal NMV - Thuế; Còn lại
     # is the gap between the two (money not yet actually settled/reflected).
-    # Same not-status-scoped treatment as platformFee/piship/phiAff/thue.
+    # tongTienDaThanhToan/soTienDieuChinh/soTienDaThu themselves are NOT
+    # status-scoped (real cashflow either happened or it didn't) — only
+    # Thuế's subtraction here is, for the same reason platformFee/phiAff
+    # are scoped in nmv_row_expr above.
     tong_tien_da_thanh_toan_row_expr = f"(({cashflow_paid_expr}) * {ratio_expr})"
     so_tien_dieu_chinh_row_expr = f"(({adjustment_expr}) * {ratio_expr})"
     so_tien_da_thu_row_expr = f"({tong_tien_da_thanh_toan_row_expr} + {so_tien_dieu_chinh_row_expr})"
-    con_lai_row_expr = f"({nmv_row_expr} - {thue_row_expr} - {so_tien_da_thu_row_expr})"
+    scoped_thue_row_expr = f'CASE WHEN o."trangThai" IN {GMV_STATUSES_SQL} THEN {thue_row_expr} ELSE 0 END'
+    con_lai_row_expr = f"({nmv_row_expr} - {scoped_thue_row_expr} - {so_tien_da_thu_row_expr})"
 
     create_sql = f"""
         CREATE OR REPLACE TEMP TABLE orders_working AS
