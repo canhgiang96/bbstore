@@ -423,6 +423,43 @@ def test_piship_assigned_only_to_first_line_of_each_order():
     assert (df["piship"] == 1620).all()
 
 
+def test_tiktok_shipped_status_counts_toward_gmv_not_cancelled():
+    # Real bug found 2026-11-09 against a real TikTok "Tất cả đơn hàng"
+    # export: order status derivation used a bare "huy" substring check,
+    # which also matches inside "chuyển" (diacritics-stripped "van chuyen"
+    # contains "...c-huy-en...") — TikTok's own "Đã vận chuyển"/"Cần vận
+    # chuyển" (shipped/needs-shipping, ordinary non-cancelled statuses)
+    # were wrongly classified as "Hủy chưa XK", zeroing GMV for the vast
+    # majority of a real file's rows (1082 of 1389). See
+    # test_tiktok_shipped_status_not_misread_as_cancelled in
+    # tests/test_derive.py for the underlying unit-level fix.
+    headers = [
+        "Mã đơn hàng", "Ngày đặt hàng", "Trạng Thái Đơn Hàng", "Lý do hủy",
+        "SKU phân loại hàng", "Tên sản phẩm", "Giá gốc", "Số lượng",
+        "Số lượng sản phẩm được hoàn trả",
+    ]
+    rows = [
+        ["T1", "2026-11-01 10:00", "Đã vận chuyển", "", "A100-1", "SP A", 399000, 1, 0],
+        ["T2", "2026-11-01 11:00", "Cần vận chuyển", "", "B200-1", "SP B", 150000, 1, 0],
+    ]
+    wb = Workbook()
+    ws = wb.active
+    ws.append(headers)
+    for r in rows:
+        ws.append(r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    parquet_bytes, row_count, _ = excel_to_parquet(buf)
+    df = pq.read_table(io.BytesIO(parquet_bytes)).to_pandas()
+    by_order = df.set_index("orderId")
+    assert by_order.loc["T1", "trangThai"] == "Đang giao"
+    assert by_order.loc["T2", "trangThai"] == "Đang giao"
+    assert by_order.loc["T1", "doanhSo"] == 399000
+    assert by_order.loc["T2", "doanhSo"] == 150000
+
+
 def test_missing_required_column_lists_all_missing_fields():
     # Every field marked required=True in mapping.FIELDS must be present;
     # a file missing several of them should name all of them, not just

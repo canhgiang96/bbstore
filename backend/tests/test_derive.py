@@ -74,6 +74,21 @@ def test_tiktok_status_and_cancel_reason_phrasing():
     assert derive_order_status("Đã hoàn tất", "", 3, 2) == "Hoàn 1 phần"
 
 
+def test_tiktok_shipped_status_not_misread_as_cancelled():
+    # Real bug found 2026-11-09 against a real TikTok "Tất cả đơn hàng"
+    # export: "huy" detection used a bare substring check, and "huy" is
+    # also a substring of "chuyển" ("van chuyen" with diacritics stripped
+    # contains "...c-huy-en...") — so TikTok's own "Đã vận chuyển"/"Cần
+    # vận chuyển" (shipped/needs-shipping — ordinary, non-cancelled
+    # statuses) were wrongly classified as "Hủy chưa XK", zeroing GMV for
+    # the vast majority of a real file's orders (1082 of 1389 rows).
+    assert derive_order_status("Đã vận chuyển", "", 1, 0) == "Đang giao"
+    assert derive_order_status("Cần vận chuyển", "", 1, 0) == "Đang giao"
+    # Genuine cancellations (a real standalone "huy" word) must still work.
+    assert derive_order_status("Đã hủy", "", 1, 0) == "Hủy chưa XK"
+    assert derive_order_status("Đã hủy", "Giao hàng thất bại", 2, 0) == "Hủy sau XK"
+
+
 def test_six_row_kpi_reconciliation():
     rows = [
         row(2, 100000, 0, "Đã hủy", "Giao hàng thất bại"),   # Hủy sau XK: 200.000

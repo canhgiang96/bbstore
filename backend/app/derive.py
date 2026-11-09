@@ -1,12 +1,7 @@
-"""Business status derivation for Orders rows.
-
-Port of deriveOrderStatus() and the per-row derived-field block inside
-buildDashboardRecords() in ../../js/app.js. Keep in sync with that file —
-the 6-branch priority order and the "4 breakdown KPIs sum to the total"
-invariant both depend on this matching exactly.
-"""
+"""Business status derivation for Orders rows."""
 from __future__ import annotations
 
+import re
 from datetime import date
 
 from .mapping import strip_diacritics
@@ -24,7 +19,15 @@ def derive_order_status(
     # a file with no status column at all (e.g. the in-house POS/social/
     # web/Zalo export, confirmed with the user 2026-08-28: "các dòng trong
     # file không có đơn hủy") has no cancellation concept to detect at all.
-    if status_known and "huy" in status_norm:
+    #
+    # \b word-boundary match, NOT a bare substring check — "huy" is also a
+    # substring of "chuyển" ("van chuyen" stripped of diacritics contains
+    # "...c-HUY-en...") which is TikTok's own "Đã vận chuyển"/"Cần vận
+    # chuyển" (shipped/needs-shipping) statuses, not a cancellation. A bare
+    # "huy" in status_norm check wrongly classified every TikTok shipped
+    # order as "Hủy chưa XK" (GMV=0), discovered 2026-11-09 against a real
+    # TikTok "Tất cả đơn hàng" export.
+    if status_known and re.search(r"\bhuy\b", status_norm):
         # "giao hang that bai" is Shopee's phrasing; "giao goi hang that
         # bai" ("delivery of the package failed") is TikTok Shop's.
         failed_delivery = "giao hang that bai" in reason_norm or "giao goi hang that bai" in reason_norm

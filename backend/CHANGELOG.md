@@ -649,10 +649,48 @@ hơn:**
   - Đã verify khớp chính xác với đơn thật: NMV = −2.700 (đúng bằng
     Piship), Còn lại = 33.546 (đúng bằng Phí AFF của đơn đó).
 
+## 31. [NGHIÊM TRỌNG] Đơn TikTok "Đã vận chuyển"/"Cần vận chuyển" bị tính nhầm thành Hủy chưa XK → GMV = 0
+
+- **Phát hiện 2026-11-09** khi kiểm tra công thức Doanh thu thuần cho
+  TikTok (yêu cầu của user), đối chiếu với file thật `Tất cả đơn
+  hàng-2026-11-09-11_04.xlsx`: logic nhận diện "đơn hủy" trước giờ chỉ
+  kiểm tra cụm con "huy" có nằm trong chuỗi trạng thái hay không — nhưng
+  "huy" cũng là 1 cụm con nằm NGAY TRONG chữ "chuyển" (bỏ dấu thành "van
+  **chuy**en" → trùng "huy" ở giữa chữ). TikTok dùng đúng cụm "Đã vận
+  chuyển"/"Cần vận chuyển" (đơn đang giao/chờ giao, hoàn toàn bình
+  thường) làm trạng thái đơn hàng — nên MỌI đơn TikTok ở 2 trạng thái
+  này bị tính nhầm thành "Hủy chưa XK" (GMV = 0).
+  - Kiểm tra trên file thật: **1.082/1.389 dòng (78%)** bị tính sai trạng
+    thái trước khi sửa — gần như toàn bộ doanh thu TikTok của Report này
+    bị ẩn khỏi GMV/Doanh thu thuần/NMV.
+  - Đã sửa `app/derive.py` (`derive_order_status`): đổi kiểm tra "huy"
+    từ so khớp chuỗi con (`"huy" in status_norm`) sang so khớp theo ranh
+    giới từ (`re.search(r"\bhuy\b", status_norm)`) — "Đã hủy" (đơn hủy
+    thật) vẫn nhận đúng, "Đã vận chuyển"/"Cần vận chuyển" giờ về đúng
+    "Đang giao".
+  - **QUAN TRỌNG — cần hành động ngay**: mọi Report Đơn hàng TikTok đã
+    convert TRƯỚC thời điểm này cần bấm **"Chuyển đổi lại"** để số liệu
+    GMV/Doanh thu thuần/NMV cập nhật đúng — nếu chưa làm, Dashboard vẫn
+    đang hiển thị sai cho các Report đó.
+
+- **Trả lời câu hỏi gốc (công thức Doanh thu thuần của TikTok)**: Doanh
+  thu thuần = GMV − Giảm giá − Voucher, công thức giống hệt mọi kênh.
+  Với TikTok: Giảm giá lấy từ cột **"SKU Seller Discount"** (giống "Người
+  bán trợ giá" của Shopee). Cột **"SKU Platform Discount"** (giảm giá do
+  TikTok tài trợ) KHÔNG trừ vào Doanh thu thuần — đúng tiền lệ đã xác
+  nhận với Shopee ("Được Shopee trợ giá" cũng không trừ, chỉ giảm giá do
+  NGƯỜI BÁN tự bỏ tiền mới trừ). Voucher hiện luôn = 0 cho TikTok vì
+  chưa thấy cột nào trong file thật tương ứng với "Mã giảm giá của Shop"
+  (TikTok có vẻ không tách riêng khái niệm voucher khỏi Seller Discount)
+  — cần xác nhận lại với user nếu TikTok thực sự có khái niệm voucher
+  riêng cần bổ sung mapping.
+
 ## Việc còn để ngỏ (chưa làm, chờ thông tin)
 
 - **Đa kênh khác (Lazada,...)**: áp dụng cách làm tương tự mục 10/11 khi có
   mẫu file thật.
+- **Voucher cho TikTok**: hiện luôn = 0, chưa rõ TikTok có cột nào tương
+  đương "Mã giảm giá của Shop" (Shopee) không — xem mục 31.
 
 ## Cache-busting frontend
 
